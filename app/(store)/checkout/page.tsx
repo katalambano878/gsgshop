@@ -182,7 +182,7 @@ export default function CheckoutPage() {
     if (!(kmValue > 0)) {
       setErrors((prev: any) => ({
         ...prev,
-        deliveryKm: 'Search your delivery location so we can set the distance.',
+        deliveryKm: 'Type your delivery area so we can set the distance.',
       }));
       return;
     }
@@ -198,7 +198,7 @@ export default function CheckoutPage() {
     if (needsKm && !(kmValue > 0)) {
       setErrors((prev: any) => ({
         ...prev,
-        deliveryKm: 'Enter the distance in km from our GSG hub to your address.',
+        deliveryKm: 'Type your delivery area so we can set the distance.',
       }));
       return;
     }
@@ -217,7 +217,7 @@ export default function CheckoutPage() {
     }
 
     if (needsKm && !(kmValue > 0)) {
-      alert('Please search your delivery location so we can calculate the distance.');
+      alert('Please type your delivery area so we can calculate the distance.');
       return;
     }
 
@@ -782,7 +782,7 @@ export default function CheckoutPage() {
               shippingLabel="Delivery"
               shippingNote={
                 !(kmValue > 0)
-                  ? 'Search your delivery location to see the delivery total.'
+                  ? 'Type your delivery area to see the delivery total.'
                   : null
               }
             />

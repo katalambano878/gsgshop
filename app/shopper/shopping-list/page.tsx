@@ -119,8 +119,8 @@ export default function ShoppingList() {
         throw new Error('Please fill in all required contact and delivery fields.');
       }
       if (!(kmValue > 0)) {
-        setLocationError('Search your delivery location so we can set the distance.');
-        throw new Error('Please select your delivery location from the search.');
+        setLocationError('Type your delivery area so we can set the distance.');
+        throw new Error('Please type your delivery area so we can calculate the distance.');
       }
       if (items.some((i) => !i.nameBrand || !i.qtySizeRange || !i.estimatedPrice)) {
         throw new Error('Please fill in all required item fields (Name, Qty, Estimated Price).');
@@ -419,7 +419,7 @@ export default function ShoppingList() {
                   </div>
                   {kmValue <= 0 && (
                     <p className="text-xs text-gray-500 mt-2">
-                      Select your delivery location above to see the exact fees.
+                      Type your delivery area above to see the exact fees.
                     </p>
                   )}
                 </div>

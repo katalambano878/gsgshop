@@ -8,6 +8,12 @@ import {
   type LatLng,
 } from '@/lib/delivery-hub';
 import { getDeliverySettings } from '@/lib/delivery-settings';
+import {
+  googleDrivingKm,
+  googleGeocode,
+  googleReverseGeocode,
+  hasGoogleMapsKey,
+} from '@/lib/google-maps-delivery';
 
 /**
  * POST /api/delivery/distance
@@ -173,6 +179,13 @@ async function roadKmViaOsrm(dest: LatLng, hub: LatLng): Promise<number | null> 
   }
 }
 
+/** Google Distance Matrix first (when keyed), then OSRM. */
+async function roadKm(dest: LatLng, hub: LatLng): Promise<number | null> {
+  const googleKm = await googleDrivingKm(hub, dest);
+  if (googleKm != null) return googleKm;
+  return roadKmViaOsrm(dest, hub);
+}
+
 type ResolveInput = {
   point: LatLng;
   label: string;
@@ -180,15 +193,15 @@ type ResolveInput = {
   city?: string | null;
   region?: string | null;
   source: 'popular' | 'geocode' | 'coords';
-  /** Pass a pre-started OSRM promise to overlap it with geocoding. */
+  /** Pass a pre-started routing promise to overlap it with geocoding. */
   kmPromise?: Promise<number | null>;
 };
 
 async function resolveDistance(input: ResolveInput) {
   const { hub } = await getDeliverySettings();
-  const osrmKm = await (input.kmPromise ?? roadKmViaOsrm(input.point, hub));
-  const km = osrmKm ?? estimateRoadKm(haversineKm(hub, input.point));
-  const method = osrmKm != null ? 'road' : 'estimated';
+  const routedKm = await (input.kmPromise ?? roadKm(input.point, hub));
+  const km = routedKm ?? estimateRoadKm(haversineKm(hub, input.point));
+  const method = routedKm != null ? 'road' : 'estimated';
 
   if (km > 500) {
     return NextResponse.json(
@@ -242,7 +255,7 @@ export async function POST(req: Request) {
 
     if (!query && !hasCoords) {
       return NextResponse.json(
-        { success: false, message: 'Enter a location or drop a pin on the map.' },
+        { success: false, message: 'Enter a location name so we can calculate the delivery distance.' },
         { status: 400 }
       );
     }
@@ -251,15 +264,18 @@ export async function POST(req: Request) {
     if (hasCoords) {
       if (lat < 4 || lat > 12 || lng < -4 || lng > 2) {
         return NextResponse.json(
-          { success: false, message: 'That pin is outside our delivery area (Ghana).' },
+          { success: false, message: 'That location is outside our delivery area (Ghana).' },
           { status: 400 }
         );
       }
       const point = { lat, lng };
       const { hub } = await getDeliverySettings();
       // Start routing immediately; reverse-geocode in parallel.
-      const kmPromise = roadKmViaOsrm(point, hub);
-      const rev = wantReverse || !query ? await reverseGeocode(lat, lng) : null;
+      const kmPromise = roadKm(point, hub);
+      const rev =
+        wantReverse || !query
+          ? (await googleReverseGeocode(lat, lng)) || (await reverseGeocode(lat, lng))
+          : null;
 
       return resolveDistance({
         point,
@@ -296,13 +312,14 @@ export async function POST(req: Request) {
       });
     }
 
-    const geoHits = await nominatimSearch(query, 1);
+    const googleHits = hasGoogleMapsKey() ? await googleGeocode(query, 1) : [];
+    const geoHits = googleHits.length > 0 ? googleHits : await nominatimSearch(query, 1);
     if (geoHits.length === 0) {
       return NextResponse.json(
         {
           success: false,
           message:
-            'We could not find that name. Drop a pin on the map, use your GPS, or try a nearby area (e.g. Madina, Spintex).',
+            'We could not find that name. Try a nearby area (e.g. Madina, Spintex) or use your current location.',
         },
         { status: 404 }
       );
@@ -364,7 +381,8 @@ export async function GET(req: Request) {
 
   let geoSuggestions: SuggestionRow[] = [];
   if (q.length >= 3) {
-    const hits = await nominatimSearch(q, 5);
+    const googleHits = hasGoogleMapsKey() ? await googleGeocode(q, 5) : [];
+    const hits = googleHits.length > 0 ? googleHits : await nominatimSearch(q, 5);
     geoSuggestions = hits.map((h, i) => ({
       id: `geo-${i}-${h.point.lat.toFixed(4)}-${h.point.lng.toFixed(4)}`,
       name: h.shortLabel.split(',')[0]?.trim() || h.label,
