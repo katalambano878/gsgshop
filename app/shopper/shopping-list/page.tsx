@@ -40,6 +40,7 @@ export default function ShoppingList() {
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [deliveryKm, setDeliveryKm] = useState('');
   const [deliveryLocationLabel, setDeliveryLocationLabel] = useState('');
+  const [deliveryPin, setDeliveryPin] = useState<{ lat: number; lng: number } | null>(null);
   const [deliveryMethod, setDeliveryMethod] = useState<'sole-express' | 'joint-express'>('sole-express');
   const pricingConfig = useDeliveryPricing();
   const [preferredTime, setPreferredTime] = useState('');
@@ -138,6 +139,8 @@ export default function ShoppingList() {
             location_label: deliveryLocationLabel || null,
             km: kmValue,
             method: deliveryMethod,
+            lat: deliveryPin?.lat ?? null,
+            lng: deliveryPin?.lng ?? null,
           },
           preferredTime,
           notes,
@@ -327,6 +330,11 @@ export default function ShoppingList() {
                   onDistanceChange={(km, meta) => {
                     setDeliveryKm(km);
                     if (meta?.label) setDeliveryLocationLabel(meta.label);
+                    if (Number.isFinite(meta?.lat) && Number.isFinite(meta?.lng)) {
+                      setDeliveryPin({ lat: meta!.lat!, lng: meta!.lng! });
+                    } else if (!km) {
+                      setDeliveryPin(null);
+                    }
                     if (km) setLocationError('');
                   }}
                   onPlaceFill={({ addressHint }) => {

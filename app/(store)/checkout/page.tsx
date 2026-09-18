@@ -48,6 +48,7 @@ export default function CheckoutPage() {
 
   const [deliveryMethod, setDeliveryMethod] = useState('pickup');
   const [deliveryKm, setDeliveryKm] = useState('');
+  const [deliveryPin, setDeliveryPin] = useState<{ lat: number; lng: number; label?: string } | null>(null);
   const pricingConfig = useDeliveryPricing();
   const [jointExpressNeighbor, setJointExpressNeighbor] = useState({ name: '', phone: '' });
   // 'moolre' = Mobile Money via Moolre. 'paystack' = Card payments via Paystack.
@@ -262,6 +263,7 @@ export default function CheckoutPage() {
           },
           deliveryMethod,
           deliveryKm: needsKm ? kmValue : 0,
+          deliveryPin: needsKm ? deliveryPin : null,
           paymentMethod,
           jointExpressNeighbor:
             deliveryMethod === 'joint-express' && (jointExpressNeighbor.name || jointExpressNeighbor.phone)
@@ -542,8 +544,13 @@ export default function CheckoutPage() {
                     <DeliveryLocationPicker
                       valueKm={deliveryKm}
                       error={errors.deliveryKm}
-                      onDistanceChange={(km) => {
+                      onDistanceChange={(km, meta) => {
                         setDeliveryKm(km);
+                        if (Number.isFinite(meta?.lat) && Number.isFinite(meta?.lng)) {
+                          setDeliveryPin({ lat: meta!.lat!, lng: meta!.lng!, label: meta?.label });
+                        } else if (!km) {
+                          setDeliveryPin(null);
+                        }
                         if (errors.deliveryKm) {
                           setErrors((prev: any) => {
                             const next = { ...prev };

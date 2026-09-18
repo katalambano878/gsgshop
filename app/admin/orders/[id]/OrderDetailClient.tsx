@@ -544,6 +544,25 @@ export default function OrderDetailClient({ orderId }: OrderDetailClientProps) {
                 </p>
                 {shippingAddress.postal_code && <p>{shippingAddress.postal_code}</p>}
                 {shippingAddress.country && <p className="font-semibold">{shippingAddress.country}</p>}
+                {(order.metadata?.delivery_km > 0 || order.metadata?.delivery_pin) && (
+                  <div className="pt-3 mt-3 border-t border-gray-100 space-y-1.5">
+                    {order.metadata?.delivery_km > 0 && (
+                      <p className="text-sm text-gray-600">
+                        <span className="font-semibold text-gray-800">{Number(order.metadata.delivery_km).toFixed(1)} km</span> from GSG Hub
+                      </p>
+                    )}
+                    {order.metadata?.delivery_pin && (
+                      <a
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${order.metadata.delivery_pin.lat},${order.metadata.delivery_pin.lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-sm font-semibold text-purple-700 hover:underline"
+                      >
+                        <i className="ri-map-pin-line" /> Navigate to exact pin (Google Maps)
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 

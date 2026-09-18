@@ -25,25 +25,81 @@ const NOMINATIM_UA =
 /** Greater Accra-ish viewbox (west,north,east,south) for Nominatim bias */
 const ACCRA_VIEWBOX = '-0.45,5.85,0.15,5.40';
 
+type NominatimAddress = {
+  amenity?: string;
+  shop?: string;
+  building?: string;
+  road?: string;
+  neighbourhood?: string;
+  quarter?: string;
+  residential?: string;
+  suburb?: string;
+  village?: string;
+  town?: string;
+  city?: string;
+  county?: string;
+  state?: string;
+};
+
 type NominatimResult = {
   lat: string;
   lon: string;
   display_name: string;
+  name?: string;
   type?: string;
   class?: string;
-  address?: {
-    city?: string;
-    town?: string;
-    suburb?: string;
-    state?: string;
-    county?: string;
-  };
+  address?: NominatimAddress;
 };
 
-async function nominatimSearch(
-  query: string,
-  limit = 5
-): Promise<Array<{ label: string; point: LatLng; city?: string; region?: string }>> {
+type GeoHit = {
+  label: string;
+  shortLabel: string;
+  point: LatLng;
+  city?: string;
+  region?: string;
+};
+
+/** External calls must never hang the customer's UI. */
+const EXTERNAL_TIMEOUT_MS = 6500;
+const externalFetch = (url: string, headers: Record<string, string>) =>
+  fetch(url, {
+    headers,
+    next: { revalidate: 0 },
+    signal: AbortSignal.timeout(EXTERNAL_TIMEOUT_MS),
+  });
+
+/**
+ * "La Road, Kaajaanor, La, Accra, La-Dade-Kotopon Municipal District, Greater
+ * Accra Region, GD-110-6313, Ghana" → "La Road, La, Accra".
+ */
+function buildShortLabel(hit: NominatimResult, opts: { includePlace?: boolean } = {}): string {
+  const a = hit.address || {};
+  // For a dropped pin we skip nearby POIs (an ATM is not the customer's house).
+  const place = opts.includePlace === false ? undefined : hit.name || a.amenity || a.shop || a.building;
+  const street = a.road;
+  const area = a.neighbourhood || a.quarter || a.residential || a.suburb || a.village;
+  const city = a.city || a.town || a.county;
+  const parts = [place, street, area, city].filter(
+    (p, i, arr): p is string => !!p && arr.indexOf(p) === i
+  );
+  if (parts.length >= 2) return parts.slice(0, 3).join(', ');
+  return hit.display_name.split(',').slice(0, 3).map((s) => s.trim()).join(', ');
+}
+
+function hitToGeo(hit: NominatimResult, opts: { includePlace?: boolean } = {}): GeoHit | null {
+  const lat = Number(hit.lat);
+  const lng = Number(hit.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return {
+    label: hit.display_name,
+    shortLabel: buildShortLabel(hit, opts),
+    point: { lat, lng },
+    city: hit.address?.suburb || hit.address?.city || hit.address?.town || undefined,
+    region: hit.address?.state || hit.address?.county || undefined,
+  };
+}
+
+async function nominatimSearch(query: string, limit = 5): Promise<GeoHit[]> {
   const attempts = [
     { q: query, countrycodes: 'gh', viewbox: ACCRA_VIEWBOX, bounded: '0' },
     { q: `${query}, Accra, Ghana`, countrycodes: 'gh', viewbox: ACCRA_VIEWBOX, bounded: '0' },
@@ -64,36 +120,15 @@ async function nominatimSearch(
     }
 
     try {
-      const res = await fetch(url.toString(), {
-        headers: { 'User-Agent': NOMINATIM_UA, Accept: 'application/json' },
-        next: { revalidate: 0 },
+      const res = await externalFetch(url.toString(), {
+        'User-Agent': NOMINATIM_UA,
+        Accept: 'application/json',
       });
       if (!res.ok) continue;
       const data = (await res.json()) as NominatimResult[];
       if (!Array.isArray(data) || data.length === 0) continue;
-
-      return data
-        .map((hit) => {
-          const lat = Number(hit.lat);
-          const lng = Number(hit.lon);
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-          return {
-            label: hit.display_name,
-            point: { lat, lng },
-            city:
-              hit.address?.suburb ||
-              hit.address?.city ||
-              hit.address?.town ||
-              undefined,
-            region: hit.address?.state || hit.address?.county || undefined,
-          };
-        })
-        .filter(Boolean) as Array<{
-        label: string;
-        point: LatLng;
-        city?: string;
-        region?: string;
-      }>;
+      const hits = data.map((h) => hitToGeo(h)).filter((h): h is GeoHit => h !== null);
+      if (hits.length > 0) return hits;
     } catch {
       continue;
     }
@@ -101,33 +136,24 @@ async function nominatimSearch(
   return [];
 }
 
-async function reverseGeocode(
-  lat: number,
-  lng: number
-): Promise<{ label: string; city?: string; region?: string } | null> {
+/** Street-level (zoom 18) reverse geocode for a dropped pin. */
+async function reverseGeocode(lat: number, lng: number): Promise<GeoHit | null> {
   const url = new URL('https://nominatim.openstreetmap.org/reverse');
   url.searchParams.set('lat', String(lat));
   url.searchParams.set('lon', String(lng));
   url.searchParams.set('format', 'jsonv2');
   url.searchParams.set('addressdetails', '1');
+  url.searchParams.set('zoom', '18');
 
   try {
-    const res = await fetch(url.toString(), {
-      headers: { 'User-Agent': NOMINATIM_UA, Accept: 'application/json' },
-      next: { revalidate: 0 },
+    const res = await externalFetch(url.toString(), {
+      'User-Agent': NOMINATIM_UA,
+      Accept: 'application/json',
     });
     if (!res.ok) return null;
     const data = (await res.json()) as NominatimResult & { error?: string };
     if (data.error || !data.display_name) return null;
-    return {
-      label: data.display_name,
-      city:
-        data.address?.suburb ||
-        data.address?.city ||
-        data.address?.town ||
-        undefined,
-      region: data.address?.state || data.address?.county || undefined,
-    };
+    return hitToGeo({ ...data, lat: String(lat), lon: String(lng) }, { includePlace: false });
   } catch {
     return null;
   }
@@ -136,10 +162,7 @@ async function reverseGeocode(
 async function roadKmViaOsrm(dest: LatLng, hub: LatLng): Promise<number | null> {
   try {
     const url = `https://router.project-osrm.org/route/v1/driving/${hub.lng},${hub.lat};${dest.lng},${dest.lat}?overview=false`;
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      next: { revalidate: 0 },
-    });
+    const res = await externalFetch(url, { Accept: 'application/json' });
     if (!res.ok) return null;
     const data = await res.json();
     const meters = data?.routes?.[0]?.distance;
@@ -150,10 +173,21 @@ async function roadKmViaOsrm(dest: LatLng, hub: LatLng): Promise<number | null> 
   }
 }
 
-async function resolveDistance(point: LatLng, label: string, city?: string | null, region?: string | null, source?: string) {
+type ResolveInput = {
+  point: LatLng;
+  label: string;
+  shortLabel?: string;
+  city?: string | null;
+  region?: string | null;
+  source: 'popular' | 'geocode' | 'coords';
+  /** Pass a pre-started OSRM promise to overlap it with geocoding. */
+  kmPromise?: Promise<number | null>;
+};
+
+async function resolveDistance(input: ResolveInput) {
   const { hub } = await getDeliverySettings();
-  const osrmKm = await roadKmViaOsrm(point, hub);
-  const km = osrmKm ?? estimateRoadKm(haversineKm(hub, point));
+  const osrmKm = await (input.kmPromise ?? roadKmViaOsrm(input.point, hub));
+  const km = osrmKm ?? estimateRoadKm(haversineKm(hub, input.point));
   const method = osrmKm != null ? 'road' : 'estimated';
 
   if (km > 500) {
@@ -169,16 +203,17 @@ async function resolveDistance(point: LatLng, label: string, city?: string | nul
   return NextResponse.json({
     success: true,
     km,
-    label,
-    city: city ?? null,
-    region: region ?? null,
-    lat: point.lat,
-    lng: point.lng,
-    source: source || 'coords',
+    label: input.label,
+    shortLabel: input.shortLabel || input.label.split(',').slice(0, 2).map((s) => s.trim()).join(', '),
+    city: input.city ?? null,
+    region: input.region ?? null,
+    lat: input.point.lat,
+    lng: input.point.lng,
+    source: input.source,
     method,
     hub: hub.label,
-    straightKm: Math.round(haversineKm(hub, point) * 10) / 10,
-    fallbackKm: distanceFromHubKm(point, hub),
+    straightKm: Math.round(haversineKm(hub, input.point) * 10) / 10,
+    fallbackKm: distanceFromHubKm(input.point, hub),
   });
 }
 
@@ -212,22 +247,29 @@ export async function POST(req: Request) {
       );
     }
 
-    // Pin / GPS path — most reliable
+    // Pin / GPS path — most reliable. Sanity-check the pin is in/near Ghana.
     if (hasCoords) {
-      let label = query || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-      let city: string | null = null;
-      let region: string | null = null;
-
-      if (wantReverse || !query) {
-        const rev = await reverseGeocode(lat, lng);
-        if (rev) {
-          label = rev.label;
-          city = rev.city || null;
-          region = rev.region || null;
-        }
+      if (lat < 4 || lat > 12 || lng < -4 || lng > 2) {
+        return NextResponse.json(
+          { success: false, message: 'That pin is outside our delivery area (Ghana).' },
+          { status: 400 }
+        );
       }
+      const point = { lat, lng };
+      const { hub } = await getDeliverySettings();
+      // Start routing immediately; reverse-geocode in parallel.
+      const kmPromise = roadKmViaOsrm(point, hub);
+      const rev = wantReverse || !query ? await reverseGeocode(lat, lng) : null;
 
-      return resolveDistance({ lat, lng }, label, city, region, 'coords');
+      return resolveDistance({
+        point,
+        label: rev?.label || query || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        shortLabel: rev?.shortLabel || query || undefined,
+        city: rev?.city || null,
+        region: rev?.region || null,
+        source: 'coords',
+        kmPromise,
+      });
     }
 
     // Text search: popular list → Nominatim (multi-strategy)
@@ -244,13 +286,14 @@ export async function POST(req: Request) {
     const match = exact || starts || null;
 
     if (match) {
-      return resolveDistance(
-        { lat: match.lat, lng: match.lng },
-        `${match.name}, ${match.city}`,
-        match.city,
-        match.region,
-        'popular'
-      );
+      return resolveDistance({
+        point: { lat: match.lat, lng: match.lng },
+        label: `${match.name}, ${match.city}`,
+        shortLabel: `${match.name}, ${match.city}`,
+        city: match.city,
+        region: match.region,
+        source: 'popular',
+      });
     }
 
     const geoHits = await nominatimSearch(query, 1);
@@ -266,7 +309,14 @@ export async function POST(req: Request) {
     }
 
     const geo = geoHits[0];
-    return resolveDistance(geo.point, geo.label, geo.city, geo.region, 'geocode');
+    return resolveDistance({
+      point: geo.point,
+      label: geo.label,
+      shortLabel: geo.shortLabel,
+      city: geo.city,
+      region: geo.region,
+      source: 'geocode',
+    });
   } catch (err: any) {
     console.error('[delivery/distance]', err?.message || err);
     return NextResponse.json({ success: false, message: 'Could not calculate distance' }, { status: 500 });
@@ -317,8 +367,8 @@ export async function GET(req: Request) {
     const hits = await nominatimSearch(q, 5);
     geoSuggestions = hits.map((h, i) => ({
       id: `geo-${i}-${h.point.lat.toFixed(4)}-${h.point.lng.toFixed(4)}`,
-      name: h.label.split(',')[0]?.trim() || h.label,
-      subtitle: h.label,
+      name: h.shortLabel.split(',')[0]?.trim() || h.label,
+      subtitle: h.shortLabel.split(',').slice(1).join(',').trim() || h.region || 'Ghana',
       city: h.city || '',
       region: h.region || '',
       lat: h.point.lat,

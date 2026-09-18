@@ -123,6 +123,18 @@ export async function POST(req: Request) {
         const paymentMethod: 'moolre' | 'paystack' =
             body.paymentMethod === 'paystack' ? 'paystack' : 'moolre';
         const jointExpressNeighbor = body.jointExpressNeighbor || null;
+        // Exact map pin (optional) — lets riders navigate to the precise spot.
+        const pinLat = Number(body.deliveryPin?.lat);
+        const pinLng = Number(body.deliveryPin?.lng);
+        const deliveryPin =
+            Number.isFinite(pinLat) && Number.isFinite(pinLng) &&
+            pinLat >= 4 && pinLat <= 12 && pinLng >= -4 && pinLng <= 2
+                ? {
+                    lat: pinLat,
+                    lng: pinLng,
+                    label: typeof body.deliveryPin?.label === 'string' ? body.deliveryPin.label.slice(0, 200) : null,
+                }
+                : null;
 
         if (items.length === 0) return bad('Cart is empty');
         for (const it of items) {
@@ -269,6 +281,7 @@ export async function POST(req: Request) {
                         last_name: shipping.lastName,
                         tracking_number: trackingNumber,
                         delivery_km: deliveryKm,
+                        ...(deliveryPin ? { delivery_pin: deliveryPin } : {}),
                         delivery_formula: delivery.formulaLabel,
                         delivery_breakdown: {
                             distance_component: delivery.distanceComponent,

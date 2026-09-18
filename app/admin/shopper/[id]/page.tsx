@@ -42,6 +42,8 @@ type ShopperRequest = {
     location_label?: string | null;
     km?: number | null;
     method?: string | null;
+    lat?: number | null;
+    lng?: number | null;
   } | null;
   preferred_time: string | null;
   notes: string | null;
@@ -662,16 +664,26 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                   </p>
                 )}
                 <p className="text-gray-900 mt-0.5">{addressText || '—'}</p>
-                {(addressText || addressLabel) && (
-                  <a
-                    href={`https://www.google.com/maps/search/${encodeURIComponent(addressLabel || addressText)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-purple-700 hover:underline inline-flex items-center gap-1 mt-1"
-                  >
-                    <i className="ri-map-pin-line" /> Open in Google Maps
-                  </a>
-                )}
+                {(() => {
+                  const pinLat = request.delivery_address?.lat;
+                  const pinLng = request.delivery_address?.lng;
+                  const hasPin = typeof pinLat === 'number' && typeof pinLng === 'number';
+                  if (!hasPin && !addressText && !addressLabel) return null;
+                  const href = hasPin
+                    ? `https://www.google.com/maps/dir/?api=1&destination=${pinLat},${pinLng}`
+                    : `https://www.google.com/maps/search/${encodeURIComponent(addressLabel || addressText)}`;
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-purple-700 hover:underline inline-flex items-center gap-1 mt-1"
+                    >
+                      <i className="ri-map-pin-line" />
+                      {hasPin ? 'Navigate to exact pin (Google Maps)' : 'Open in Google Maps'}
+                    </a>
+                  );
+                })()}
               </div>
               {request.preferred_time && (
                 <div>
