@@ -9,7 +9,6 @@ import ScrollToTop from '@/components/ScrollToTop';
 import WhatsAppWidget from '@/components/WhatsAppWidget';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import NavigationProgress from '@/components/NavigationProgress';
-import CookieConsent from '@/components/CookieConsent';
 import { CMSProvider } from '@/context/CMSContext';
 
 // Lazy-load non-critical components
@@ -52,7 +51,6 @@ export default function StoreLayout({
         <NetworkStatusMonitor />
         <UpdatePrompt />
         <LiveSalesNotification />
-        <CookieConsent />
         <WhatsAppWidget
           greeting={"Hi there! 👋\n\nWelcome to GSG Convenience Goods & More. How can we help you shop today?"}
           prefilledMessage={"Hi GSG! I'd like some help with my order."}
