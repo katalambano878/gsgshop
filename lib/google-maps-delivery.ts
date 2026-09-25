@@ -99,10 +99,13 @@ export async function googleReverseGeocode(lat: number, lng: number): Promise<Go
   }
 }
 
-/** Driving kilometres from origin → destination via Distance Matrix. */
-export async function googleDrivingKm(origin: LatLng, dest: LatLng): Promise<number | null> {
-  const key = googleKey();
-  if (!key) return null;
+function metersToKm(meters: number): number | null {
+  if (!Number.isFinite(meters) || meters <= 0) return null;
+  return Math.max(0.5, Math.round((meters / 1000) * 10) / 10);
+}
+
+/** Legacy Distance Matrix — many new Google projects no longer enable this. */
+async function drivingKmViaDistanceMatrix(origin: LatLng, dest: LatLng, key: string): Promise<number | null> {
   const url = new URL('https://maps.googleapis.com/maps/api/distancematrix/json');
   url.searchParams.set('origins', `${origin.lat},${origin.lng}`);
   url.searchParams.set('destinations', `${dest.lat},${dest.lng}`);
@@ -116,10 +119,47 @@ export async function googleDrivingKm(origin: LatLng, dest: LatLng): Promise<num
     const data = await res.json();
     const el = data?.rows?.[0]?.elements?.[0];
     if (data.status !== 'OK' || el?.status !== 'OK') return null;
-    const meters = el.distance?.value;
-    if (!Number.isFinite(meters) || meters <= 0) return null;
-    return Math.max(0.5, Math.round((meters / 1000) * 10) / 10);
+    return metersToKm(Number(el.distance?.value));
   } catch {
     return null;
   }
+}
+
+/**
+ * Routes API (current Google product). Used when Distance Matrix legacy is off.
+ * Needs Routes API enabled on the Cloud project and allowed on the key.
+ */
+async function drivingKmViaRoutes(origin: LatLng, dest: LatLng, key: string): Promise<number | null> {
+  try {
+    const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'routes.distanceMeters',
+      },
+      body: JSON.stringify({
+        origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
+        destination: { location: { latLng: { latitude: dest.lat, longitude: dest.lng } } },
+        travelMode: 'DRIVE',
+        routingPreference: 'TRAFFIC_UNAWARE',
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return metersToKm(Number(data?.routes?.[0]?.distanceMeters));
+  } catch {
+    return null;
+  }
+}
+
+/** Driving kilometres from origin → destination (Google, then null for OSRM fallback). */
+export async function googleDrivingKm(origin: LatLng, dest: LatLng): Promise<number | null> {
+  const key = googleKey();
+  if (!key) return null;
+  return (
+    (await drivingKmViaDistanceMatrix(origin, dest, key)) ??
+    (await drivingKmViaRoutes(origin, dest, key))
+  );
 }
