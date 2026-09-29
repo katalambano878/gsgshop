@@ -20,6 +20,10 @@ const SHOPPER_DELIVERY_OPTIONS = [
   },
 ] as const;
 
+const fieldClass =
+  'w-full rounded-xl border border-stone-200 bg-white px-3.5 py-3 text-sm text-gsg-black outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-stone-400 focus:border-gsg-purple focus:ring-4 focus:ring-gsg-purple/10';
+const labelClass = 'mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500';
+
 interface RequestItem {
   id: string;
   nameBrand: string;
@@ -164,76 +168,103 @@ export default function ShoppingList() {
     }
   };
 
+  const ghs = (amount: number) => `GH₵${amount.toFixed(2)}`;
+
   return (
-    <div className="bg-gray-50 min-h-screen py-12">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-10">
-          <h1 className="text-3xl font-bold text-gsg-black mb-4">Create Your Shopping List</h1>
-          <p className="text-gray-600">
-            List the items you need, and we&apos;ll source them for you at market price.
-          </p>
-        </div>
+    <div className="min-h-screen bg-[#f4f0ea] py-8 md:py-14">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        <header className="mb-8 flex flex-col gap-6 border-b border-stone-300/70 pb-8 md:mb-10 md:flex-row md:items-end md:justify-between">
+          <div className="max-w-xl">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gsg-purple">
+              My Personal Shopper
+            </p>
+            <h1 className="mt-2 font-serif text-4xl leading-tight text-gsg-black text-balance md:text-5xl">
+              Create your list
+            </h1>
+            <p className="mt-3 max-w-md text-sm leading-relaxed text-stone-600 text-pretty">
+              Tell us what you need. We source it at the market price and bring it to your door in Accra.
+            </p>
+          </div>
+          <dl className="grid w-full min-w-0 grid-cols-3 gap-3 text-stone-600 sm:w-auto sm:gap-8">
+            <div className="min-w-0">
+              <dt className="font-serif text-2xl text-gsg-black">5%</dt>
+              <dd className="mt-0.5 text-[11px] leading-snug text-pretty sm:text-xs">markup or less</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="font-serif text-2xl text-gsg-black">Daily</dt>
+              <dd className="mt-0.5 text-[11px] leading-snug text-pretty sm:text-xs">express in Accra</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="font-serif text-2xl text-gsg-black">Pay</dt>
+              <dd className="mt-0.5 text-[11px] leading-snug text-pretty sm:text-xs">estimate first</dd>
+            </div>
+          </dl>
+        </header>
 
         {error && (
-          <div className="bg-red-50 text-red-600 p-4 rounded-lg mb-8 border border-red-100">
+          <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-8">
-          <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-xl font-bold text-gsg-black mb-6">Items</h2>
+        <form onSubmit={handleSubmit} className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="space-y-8">
+          <section className="rounded-3xl border border-white/80 bg-white p-5 shadow-[0_20px_50px_-28px_rgba(15,15,15,0.45)] md:p-8">
+            <div className="mb-6 flex items-end justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">01</p>
+                <h2 className="mt-1 font-serif text-2xl text-gsg-black text-balance">What should we buy?</h2>
+              </div>
+              <p className="hidden text-xs text-stone-500 sm:block">{items.length} item{items.length === 1 ? '' : 's'}</p>
+            </div>
 
             <div className="space-y-6">
               {items.map((item, index) => (
                 <div
                   key={item.id}
-                  className="relative p-4 md:p-6 border border-gray-200 rounded-xl bg-gray-50/50"
+                  className="rounded-2xl border border-stone-200/80 bg-[#faf8f5] p-4 md:p-5"
                 >
-                  <div className="absolute -top-3 -left-3 w-8 h-8 bg-gsg-purple text-white rounded-full flex items-center justify-center font-bold text-sm">
-                    {index + 1}
+                  <div className="mb-4 flex items-center justify-between">
+                    <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-full bg-gsg-black px-2 font-serif text-sm text-white">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    {items.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeItem(item.id)}
+                        aria-label={`Remove item ${index + 1}`}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-full text-stone-400 transition-colors duration-150 hover:bg-red-50 hover:text-red-600"
+                      >
+                        <i className="ri-delete-bin-line text-lg"></i>
+                      </button>
+                    )}
                   </div>
-                  {items.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeItem(item.id)}
-                      className="absolute top-4 right-4 text-gray-400 hover:text-red-500 transition-colors"
-                    >
-                      <i className="ri-delete-bin-line text-xl"></i>
-                    </button>
-                  )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 mt-2">
-                    <div className="md:col-span-4">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Item Name / Brand *
-                      </label>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
+                    <div className="md:col-span-5">
+                      <label className={labelClass}>Item name / brand *</label>
                       <input
                         type="text"
                         required
                         value={item.nameBrand}
                         onChange={(e) => updateItem(item.id, 'nameBrand', e.target.value)}
-                        className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
-                        placeholder="e.g. Milo Cereal 500g"
+                        className={fieldClass}
+                        placeholder="Milo cereal 500g"
                       />
                     </div>
                     <div className="md:col-span-3">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Qty / Size / Range *
-                      </label>
+                      <label className={labelClass}>Qty / size *</label>
                       <input
                         type="text"
                         required
                         value={item.qtySizeRange}
                         onChange={(e) => updateItem(item.id, 'qtySizeRange', e.target.value)}
-                        className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
-                        placeholder="e.g. 2 packs"
+                        className={fieldClass}
+                        placeholder="2 packs"
                       />
                     </div>
-                    <div className="md:col-span-3">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Est. Price (GHS) *
-                      </label>
+                    <div className="md:col-span-4">
+                      <label className={labelClass}>Est. price (GHS) *</label>
                       <input
                         type="number"
                         required
@@ -241,35 +272,31 @@ export default function ShoppingList() {
                         step="0.01"
                         value={item.estimatedPrice}
                         onChange={(e) => updateItem(item.id, 'estimatedPrice', e.target.value)}
-                        className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
+                        className={`${fieldClass} tabular-nums`}
                         placeholder="0.00"
                       />
                     </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Produce Source
-                      </label>
+                    <div className="md:col-span-4">
+                      <label className={labelClass}>Produce source</label>
                       <select
                         value={item.sourceType}
                         onChange={(e) => updateItem(item.id, 'sourceType', e.target.value)}
-                        className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none text-sm"
+                        className={fieldClass}
                       >
-                        <option value="">N/A</option>
-                        <option value="Local Market">Local Market</option>
+                        <option value="">Not specified</option>
+                        <option value="Local Market">Local market</option>
                         <option value="Imported">Imported</option>
-                        <option value="Controlled Environment">Controlled Env.</option>
+                        <option value="Controlled Environment">Controlled environment</option>
                       </select>
                     </div>
-                    <div className="md:col-span-12">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Remarks / Comments
-                      </label>
+                    <div className="md:col-span-8">
+                      <label className={labelClass}>Note for this item</label>
                       <input
                         type="text"
                         value={item.remark}
                         onChange={(e) => updateItem(item.id, 'remark', e.target.value)}
-                        className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
-                        placeholder="Any specific instructions for this item?"
+                        className={fieldClass}
+                        placeholder="Brand, ripeness, substitute if sold out…"
                       />
                     </div>
                   </div>
@@ -280,48 +307,51 @@ export default function ShoppingList() {
             <button
               type="button"
               onClick={addItem}
-              className="mt-6 flex items-center gap-2 text-gsg-purple font-bold hover:text-gsg-purple-dark transition-colors"
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-stone-300 py-3.5 text-sm font-semibold text-gsg-purple transition-colors duration-150 hover:border-gsg-purple hover:bg-purple-50/60"
             >
-              <i className="ri-add-circle-line text-xl"></i> Add Another Item
+              <i className="ri-add-line text-lg"></i> Add another item
             </button>
-          </div>
+          </section>
 
-          <div className="grid md:grid-cols-2 gap-8">
-            <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100">
-              <h2 className="text-xl font-bold text-gsg-black mb-6">Contact & Delivery</h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">Full Name *</label>
+          <section className="rounded-3xl border border-white/80 bg-white p-5 shadow-[0_20px_50px_-28px_rgba(15,15,15,0.45)] md:p-8">
+              <div className="mb-6">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-400">02</p>
+                <h2 className="mt-1 font-serif text-2xl text-gsg-black text-balance">Where should it go?</h2>
+              </div>
+              <div className="space-y-5">
+                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <label className={labelClass}>Full name *</label>
                   <input
                     type="text"
                     required
                     value={contactName}
                     onChange={(e) => setContactName(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
+                    className={fieldClass}
+                    autoComplete="name"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">
-                    Phone Number *
-                  </label>
+                  <label className={labelClass}>Phone *</label>
                   <input
                     type="tel"
                     required
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
+                    className={fieldClass}
+                    autoComplete="tel"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">
-                    Email (Optional)
-                  </label>
+                  <label className={labelClass}>Email</label>
                   <input
                     type="email"
                     value={contactEmail}
                     onChange={(e) => setContactEmail(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
+                    className={fieldClass}
+                    autoComplete="email"
                   />
+                </div>
                 </div>
 
                 <DeliveryLocationPicker
@@ -345,27 +375,23 @@ export default function ShoppingList() {
                 />
 
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">
-                    Delivery Address *
-                  </label>
+                  <label className={labelClass}>Street address *</label>
                   <textarea
                     required
                     value={deliveryAddress}
                     onChange={(e) => setDeliveryAddress(e.target.value)}
                     rows={3}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
-                    placeholder="Street, house number, and landmarks"
+                    className={fieldClass}
+                    placeholder="House number, street, and a landmark"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Add street details after selecting your area above.
+                  <p className="mt-1.5 text-xs text-stone-500 text-pretty">
+                    Add the door details after choosing the area above.
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    Delivery Method *
-                  </label>
-                  <div className="space-y-3">
+                  <label className={labelClass}>Delivery method *</label>
+                  <div className="grid gap-3">
                     {SHOPPER_DELIVERY_OPTIONS.map((opt) => {
                       const preview = calculateDeliveryFee({
                         method: opt.value,
@@ -374,147 +400,135 @@ export default function ShoppingList() {
                         config: pricingConfig,
                       });
                       const selected = deliveryMethod === opt.value;
+                      const icon = opt.value === 'sole-express' ? 'ri-motorbike-line' : 'ri-user-shared-line';
                       return (
                         <label
                           key={opt.value}
-                          className={`flex items-start justify-between gap-3 p-4 border-2 rounded-xl cursor-pointer transition-all ${
+                          className={`flex cursor-pointer items-start justify-between gap-3 rounded-2xl border p-4 transition-[border-color,background-color,box-shadow] duration-150 ${
                             selected
-                              ? 'border-gsg-purple bg-purple-50'
-                              : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                              ? 'border-gsg-purple bg-[#faf7ff] shadow-[0_0_0_1px_#6B21A8]'
+                              : 'border-stone-200 bg-[#faf8f5] hover:border-stone-300'
                           }`}
                         >
-                          <div className="flex items-start gap-3 min-w-0">
-                            <div
-                              className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                                selected ? 'border-gsg-purple' : 'border-gray-300'
+                          <div className="flex min-w-0 items-start gap-3">
+                            <span
+                              className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                                selected ? 'bg-gsg-purple text-white' : 'bg-white text-stone-500'
                               }`}
                             >
-                              {selected && <div className="w-2.5 h-2.5 rounded-full bg-gsg-purple"></div>}
-                            </div>
+                              <i className={`${icon} text-lg`}></i>
+                            </span>
                             <input
                               type="radio"
                               name="shopper-delivery"
                               value={opt.value}
                               checked={selected}
                               onChange={() => setDeliveryMethod(opt.value)}
-                              className="hidden"
+                              className="sr-only"
                             />
-                            <div className="min-w-0">
-                              <p className={`font-bold text-sm ${selected ? 'text-gsg-purple' : 'text-gsg-black'}`}>
+                            <span className="min-w-0">
+                              <span className={`block text-sm font-semibold ${selected ? 'text-gsg-purple' : 'text-gsg-black'}`}>
                                 {opt.label}
-                              </p>
-                              <p className="text-xs text-gray-500 mt-1 leading-relaxed text-pretty">{opt.desc}</p>
-                            </div>
+                              </span>
+                              <span className="mt-1 block text-xs leading-relaxed text-stone-500 text-pretty">{opt.desc}</span>
+                            </span>
                           </div>
-                          <p
-                            className={`text-sm font-bold shrink-0 tabular-nums ${
-                              selected ? 'text-gsg-purple' : 'text-gsg-black'
-                            }`}
-                          >
-                            {kmValue > 0 ? `GH₵${preview.fee.toFixed(2)}` : '—'}
-                          </p>
+                          <span className={`shrink-0 text-sm font-semibold tabular-nums ${selected ? 'text-gsg-purple' : 'text-gsg-black'}`}>
+                            {kmValue > 0 ? ghs(preview.fee) : '—'}
+                          </span>
                         </label>
                       );
                     })}
                   </div>
                   {kmValue <= 0 && (
-                    <p className="text-xs text-gray-500 mt-2">
+                    <p className="mt-2 text-xs text-stone-500">
                       Type your delivery area above to see the exact fees.
                     </p>
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">
-                    Preferred Delivery Time
-                  </label>
+                  <label className={labelClass}>Preferred time</label>
                   <input
                     type="text"
                     value={preferredTime}
                     onChange={(e) => setPreferredTime(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
-                    placeholder="e.g. Tomorrow morning, Today by 5pm"
+                    className={fieldClass}
+                    placeholder="Tomorrow morning"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">
-                    General Notes
-                  </label>
+                  <label className={labelClass}>Notes for the shopper</label>
                   <textarea
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     rows={2}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gsg-purple outline-none"
+                    className={fieldClass}
+                    placeholder="Gate code, call on arrival…"
                   />
                 </div>
               </div>
-            </div>
+          </section>
+          </div>
 
-            <div>
-              <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100 sticky top-24">
-                <h2 className="text-xl font-bold text-gsg-black mb-6">Estimate Summary</h2>
-
-                <div className="space-y-4 mb-6">
-                  <div className="flex justify-between text-gray-600">
-                    <span>Items Subtotal (Est.)</span>
-                    <span className="font-medium">GH₵{subtotal.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-gray-600">
-                    <span>Markup (5% or less)</span>
-                    <span className="font-medium">GH₵{markup.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-gray-600 text-sm">
-                    <span>Distance</span>
-                    <span className="font-medium tabular-nums">
-                      {kmValue > 0 ? `${kmValue.toFixed(1)} km` : 'Select location'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-gray-600">
-                    <span>
-                      Delivery Fee
-                      <span className="block text-[11px] text-gray-400">
-                        {deliveryMethod === 'sole-express'
-                          ? 'Sole Express (Daily)'
-                          : 'Joint Express – Myself & Neighbor'}
-                      </span>
-                    </span>
-                    <span className="font-medium tabular-nums">
-                      {kmValue > 0 ? `GH₵${deliveryFee.toFixed(2)}` : '—'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-gray-600 text-sm italic">
-                    <span>Sourcing Fee</span>
-                    <span>If applicable</span>
-                  </div>
-                  <div className="border-t border-gray-200 pt-4 flex justify-between text-lg font-bold text-gsg-black">
-                    <span>Total Estimate</span>
-                    <span className="text-gsg-purple">GH₵{total.toFixed(2)}</span>
-                  </div>
+          <aside className="lg:sticky lg:top-24">
+            <div className="overflow-hidden rounded-3xl bg-[#161218] text-white shadow-[0_24px_60px_-28px_rgba(15,15,15,0.7)]">
+              <div className="border-b border-white/10 px-6 py-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gsg-accent">03 · Estimate</p>
+                <h2 className="mt-1 font-serif text-2xl text-balance">Your receipt</h2>
+              </div>
+              <dl className="space-y-3 px-6 py-5 text-sm">
+                <div className="flex justify-between gap-4 text-white/70">
+                  <dt>Items</dt>
+                  <dd className="tabular-nums text-white">{ghs(subtotal)}</dd>
                 </div>
-
-                <div className="bg-purple-50 p-4 rounded-xl mb-6 text-sm text-purple-800">
-                  <i className="ri-information-line mr-2"></i>
-                  You&apos;ll pay this estimate upfront to lock in your shopper. If actual market
-                  prices differ significantly, we&apos;ll contact you before delivery to adjust —
-                  extra owed becomes a top-up, refunds are issued in 1–3 business days.
+                <div className="flex justify-between gap-4 text-white/70">
+                  <dt>Markup, 5% or less</dt>
+                  <dd className="tabular-nums text-white">{ghs(markup)}</dd>
                 </div>
-
+                <div className="flex justify-between gap-4 text-white/70">
+                  <dt>Distance</dt>
+                  <dd className="tabular-nums text-white">{kmValue > 0 ? `${kmValue.toFixed(1)} km` : 'Not set'}</dd>
+                </div>
+                <div className="flex justify-between gap-4 text-white/70">
+                  <dt>
+                    Delivery
+                    <span className="mt-0.5 block text-[11px] text-white/40">
+                      {deliveryMethod === 'sole-express' ? 'Sole Express, daily' : 'Joint Express, daily'}
+                    </span>
+                  </dt>
+                  <dd className="tabular-nums text-white">{kmValue > 0 ? ghs(deliveryFee) : '—'}</dd>
+                </div>
+                <div className="flex justify-between gap-4 text-white/50">
+                  <dt>Sourcing fee</dt>
+                  <dd>If it applies</dd>
+                </div>
+              </dl>
+              <div className="mx-6 border-t border-dashed border-white/15" />
+              <div className="flex items-end justify-between px-6 py-5">
+                <p className="text-xs uppercase tracking-[0.16em] text-white/50">Total</p>
+                <p className="font-serif text-4xl tabular-nums text-gsg-accent">{ghs(total)}</p>
+              </div>
+              <div className="px-6 pb-6">
+                <p className="mb-4 text-xs leading-relaxed text-white/55 text-pretty">
+                  You pay this estimate to lock in your shopper. If the market price moves, we call before delivery. Extra becomes a top-up. Refunds take 1–3 business days.
+                </p>
                 <button
                   type="submit"
                   disabled={loading || items.length === 0}
-                  className="w-full bg-gsg-black hover:bg-gsg-purple text-white py-4 rounded-xl font-bold transition-all shadow-lg disabled:opacity-50 flex justify-center items-center gap-2"
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white py-4 text-sm font-semibold text-gsg-black transition-[background-color,transform] duration-150 hover:bg-gsg-accent active:scale-[0.98] disabled:opacity-50"
                 >
                   {loading ? (
                     <i className="ri-loader-4-line animate-spin text-xl"></i>
                   ) : (
                     <>
                       <i className="ri-secure-payment-line text-lg"></i>
-                      Submit & Pay GH₵{total.toFixed(2)}
+                      Submit and pay {ghs(total)}
                     </>
                   )}
                 </button>
               </div>
             </div>
-          </div>
+          </aside>
         </form>
       </div>
     </div>
