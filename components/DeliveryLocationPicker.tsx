@@ -198,10 +198,8 @@ export default function DeliveryLocationPicker({
       setStatus('Type your area or landmark — for example East Legon, Spintex, or Accra Mall.');
       return;
     }
-    if (suggestions[0]) {
-      pickSuggestion(suggestions[0]);
-      return;
-    }
+    // Always resolve the words they typed. The first dropdown row can be a
+    // district or country hit and must not replace the address.
     await resolve({ query: q });
   };
 
@@ -245,6 +243,14 @@ export default function DeliveryLocationPicker({
   const kmNum = parseFloat(valueKm);
   const hasDistance = Number.isFinite(kmNum) && kmNum > 0;
   const hubShort = hubLabel.replace(/^GSG Hub\s*[—-]\s*/i, '');
+  const queryText = query.trim().toLowerCase();
+  const selectedText = (selected?.shortLabel || '').toLowerCase();
+  const selectionStale = Boolean(
+    selected &&
+      queryText.length >= 3 &&
+      !selectedText.includes(queryText) &&
+      !queryText.includes(selectedText.split(',')[0] || '___')
+  );
 
   return (
     <div ref={wrapRef} className="space-y-3">
@@ -367,7 +373,12 @@ export default function DeliveryLocationPicker({
           </div>
 
           {hasDistance && selected ? (
-            <div className="border-t border-green-100 bg-green-50/90 px-4 py-3.5">
+            <div className={`border-t px-4 py-3.5 ${selectionStale ? 'border-amber-100 bg-amber-50/90' : 'border-green-100 bg-green-50/90'}`}>
+              {selectionStale && (
+                <p className="text-xs font-semibold text-amber-900 mb-2">
+                  Still using the previous location. Press Find or pick a result to replace it.
+                </p>
+              )}
               <div className="flex items-start gap-3">
                 <div className="shrink-0 w-9 h-9 rounded-full bg-green-600 text-white flex items-center justify-center">
                   <i className="ri-check-line text-lg" />
