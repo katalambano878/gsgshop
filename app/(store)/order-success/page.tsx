@@ -487,8 +487,8 @@ function computeDeliveryEstimate(order: any): {
   if (method === 'personal-shopper') {
     return {
       heading: 'Delivery',
-      dateLabel: 'Scheduled with your shopper',
-      subLabel: 'Your personal shopper will confirm timing after sourcing your items',
+      dateLabel: 'Free delivery',
+      subLabel: 'Pay for this cart, then continue shopping at Personal Shopper for more items',
     };
   }
 
