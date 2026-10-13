@@ -44,6 +44,16 @@ export default function ShippingPage() {
       icon: 'ri-group-line',
       highlight: false,
     },
+    {
+      id: 'personal-shopper',
+      type: 'Add To Personal Shopper',
+      time: 'Continue shopping after checkout',
+      cost: 'Free delivery',
+      description:
+        'Select this option if you wish to continue shopping at Personal Shopper. Pay for your current cart, then visit Personal Shopper for additional shopping.',
+      icon: 'ri-shopping-bag-3-line',
+      highlight: false,
+    },
   ];
 
   const zones = [
@@ -82,7 +92,7 @@ export default function ShippingPage() {
     <div className="min-h-screen bg-gray-50">
       <PageHero
         title="Shipping & Delivery"
-        subtitle="Pickup, Free Delivery (Tue/Fri), Sole Express, and Joint Express — across Ghana."
+        subtitle="Pickup, Free Delivery (Tue/Fri), Sole Express, Joint Express, and Add To Personal Shopper — across Ghana."
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
@@ -92,7 +102,7 @@ export default function ShippingPage() {
             <h2 className="text-3xl font-bold text-gsg-black mb-3">Delivery Options</h2>
             <p className="text-gray-500 max-w-2xl mx-auto">Choose the delivery method that works best for you. Perishable items require Express delivery for freshness.</p>
           </div>
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
             {deliveryOptions.map((option) => (
               <div
                 key={option.id}

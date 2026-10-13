@@ -9,7 +9,6 @@ import { useCart } from '@/context/CartContext';
 import { supabase } from '@/lib/supabase';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { useRecaptcha } from '@/hooks/useRecaptcha';
-import { shopperUrl } from '@/lib/site-urls';
 import {
   calculateDeliveryFee,
   methodNeedsDistance,
@@ -81,33 +80,33 @@ export default function CheckoutPage() {
   const deliveryOptionsList = [
     {
       value: 'personal-shopper',
-      label: 'Add To My Personal Shopper',
-      desc: 'Send your list to your personal shopper. Delivery priced separately there.',
-      href: '/shopper/shopping-list',
+      label: 'Add To Personal Shopper',
+      subtitle: 'Free delivery',
+      desc: 'Select this option if you wish to continue shopping at Personal Shopper. Pay for your current cart, then visit Personal Shopper for additional shopping.',
     },
     {
       value: 'free-delivery',
       label: 'Free Delivery (Tue/Fri)',
+      subtitle: null as string | null,
       desc: 'Tue/Fri only. Confirm before noon the preceding day. Total shown after your address.',
-      href: null,
     },
     {
       value: 'sole-express',
       label: 'Sole Express Delivery (Daily)',
+      subtitle: null as string | null,
       desc: 'Required for fresh/perishable. 2hr–48hr slots after confirmation.',
-      href: null,
     },
     {
       value: 'joint-express',
       label: 'Joint Express – Myself & Neighbor (Daily)',
+      subtitle: null as string | null,
       desc: 'Share delivery with a neighbour; items stay private. 2hr–48hr slots.',
-      href: null,
     },
     {
       value: 'pickup',
       label: 'Pickup (Within 72 Hrs.)',
+      subtitle: null as string | null,
       desc: 'No delivery fee. Collect within 72hrs (excl. Sunday) at the hub in your confirmation.',
-      href: null,
     },
   ];
 
@@ -630,6 +629,11 @@ export default function CheckoutPage() {
                             />
                             <div className="min-w-0">
                               <p className={`font-bold ${deliveryMethod === opt.value ? 'text-gsg-purple' : 'text-gsg-black'}`}>{opt.label}</p>
+                              {opt.subtitle && (
+                                <p className={`text-sm font-semibold mt-0.5 ${deliveryMethod === opt.value ? 'text-gsg-purple' : 'text-emerald-700'}`}>
+                                  {opt.subtitle}
+                                </p>
+                              )}
                               <p className="text-sm text-gray-500 mt-1 leading-relaxed">{opt.desc}</p>
                             </div>
                           </div>
@@ -667,12 +671,6 @@ export default function CheckoutPage() {
                         />
                       </div>
                     </div>
-                  )}
-                  {deliveryMethod === 'personal-shopper' && (
-                    <p className="mt-4 text-sm text-gray-600 bg-blue-50 p-4 rounded-xl border border-blue-100">
-                      <i className="ri-information-fill text-blue-500 mr-1"></i>
-                      <a href={shopperUrl('/shopping-list')} className="text-blue-700 font-bold hover:underline">Go to My Personal Shopper</a> to add items to your list.
-                    </p>
                   )}
                 </div>
 
