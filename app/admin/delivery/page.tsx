@@ -21,6 +21,7 @@ type FormState = {
   hubLabel: string;
   hubLat: string;
   hubLng: string;
+  shopperMarkupPct: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -34,9 +35,14 @@ const EMPTY_FORM: FormState = {
   hubLabel: '',
   hubLat: '',
   hubLng: '',
+  shopperMarkupPct: '5',
 };
 
-function toForm(pricing: DeliveryPricingConfig, hub: { label: string; lat: number; lng: number }): FormState {
+function toForm(
+  pricing: DeliveryPricingConfig,
+  hub: { label: string; lat: number; lng: number },
+  shopperMarkupPct = 5
+): FormState {
   return {
     ratePerKm: String(pricing.ratePerKm),
     soleMultiplier: String(pricing.soleMultiplier),
@@ -48,6 +54,7 @@ function toForm(pricing: DeliveryPricingConfig, hub: { label: string; lat: numbe
     hubLabel: hub.label,
     hubLat: String(hub.lat),
     hubLng: String(hub.lng),
+    shopperMarkupPct: String(Number.isFinite(shopperMarkupPct) ? shopperMarkupPct : 5),
   };
 }
 
@@ -66,7 +73,11 @@ export default function AdminDeliveryPricingPage() {
       .then((res) => res.json())
       .then((data) => {
         if (data?.success && data.settings) {
-          setForm(toForm(normalizeDeliveryPricing(data.settings.pricing), data.settings.hub || GSG_HUB));
+          setForm(toForm(
+            normalizeDeliveryPricing(data.settings.pricing),
+            data.settings.hub || GSG_HUB,
+            Number(data.settings.shopperMarkupPct)
+          ));
         } else {
           setForm(toForm(normalizeDeliveryPricing(null), GSG_HUB));
         }
@@ -123,13 +134,18 @@ export default function AdminDeliveryPricingPage() {
         body: JSON.stringify({
           pricing: draftPricing,
           hub: { label: form.hubLabel.trim(), lat, lng },
+          shopperMarkupPct: parseFloat(form.shopperMarkupPct),
         }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save');
 
-      setForm(toForm(normalizeDeliveryPricing(data.settings.pricing), data.settings.hub));
-      setMessage({ type: 'success', text: 'Delivery pricing saved. New orders use these values immediately.' });
+      setForm(toForm(
+        normalizeDeliveryPricing(data.settings.pricing),
+        data.settings.hub,
+        Number(data.settings.shopperMarkupPct)
+      ));
+      setMessage({ type: 'success', text: 'Saved. New orders use these values immediately.' });
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to save settings.' });
     } finally {
@@ -216,6 +232,14 @@ export default function AdminDeliveryPricingPage() {
             </div>
           </div>
 
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">Personal Shopper markup</h2>
+            <p className="text-xs text-gray-500 mb-5">
+              Added on top of the item subtotal. Keep it low while you are attracting customers, then raise it here. 0 turns it off. Maximum 30.
+            </p>
+            {numField('Markup', 'shopperMarkupPct', 'Default 5%. Applies to new lists and when you finalize a request.', { suffix: '%', step: '0.1' })}
+          </div>
+
           {/* Hub */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
             <h2 className="text-lg font-bold text-gray-900 mb-1">Dispatch Hub</h2>
@@ -254,7 +278,7 @@ export default function AdminDeliveryPricingPage() {
             className="w-full sm:w-auto px-8 py-3.5 bg-gray-900 hover:bg-purple-700 text-white rounded-xl font-bold transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
           >
             {saving ? <i className="ri-loader-4-line animate-spin" /> : <i className="ri-save-line" />}
-            Save Delivery Pricing
+            Save pricing
           </button>
         </div>
 

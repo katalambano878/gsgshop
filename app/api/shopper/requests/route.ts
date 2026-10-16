@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { verifyAuth } from '@/lib/auth';
 import { calculateDeliveryFee } from '@/lib/delivery-pricing';
-import { getDeliverySettings } from '@/lib/delivery-settings';
+import { getDeliverySettings, shopperMarkupAmount } from '@/lib/delivery-settings';
 
 export async function POST(request: Request) {
   try {
@@ -31,9 +31,9 @@ export async function POST(request: Request) {
         ? body.deliveryMethod
         : null;
 
+    const settings = await getDeliverySettings();
     let deliveryFee = 0;
     if (deliveryMethod && deliveryKm > 0) {
-      const settings = await getDeliverySettings();
       deliveryFee = calculateDeliveryFee({
         method: deliveryMethod,
         km: deliveryKm,
@@ -43,7 +43,9 @@ export async function POST(request: Request) {
     }
 
     const safeSubtotal = Math.max(0, Number(subtotalEst) || 0);
-    const safeMarkup = Math.max(0, Number(markup) || 0);
+    // Ignore the number the browser sent. Markup always follows the admin setting.
+    void markup;
+    const safeMarkup = shopperMarkupAmount(safeSubtotal, settings.shopperMarkupPct);
     const totalEst = safeSubtotal + safeMarkup + deliveryFee;
 
     // 1. Create Request

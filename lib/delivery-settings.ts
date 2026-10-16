@@ -14,14 +14,30 @@ import {
 
 export const DELIVERY_SETTINGS_KEY = 'delivery_pricing';
 
+/** Personal Shopper markup on the item subtotal. 5 means 5%. */
+export const DEFAULT_SHOPPER_MARKUP_PCT = 5;
+
+export function normalizeShopperMarkupPct(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_SHOPPER_MARKUP_PCT;
+  return Math.min(30, Math.max(0, Math.round(n * 10) / 10));
+}
+
+export function shopperMarkupAmount(subtotal: number, pct: number): number {
+  const base = Math.max(0, subtotal);
+  return Math.round(base * (normalizeShopperMarkupPct(pct) / 100) * 100) / 100;
+}
+
 export type DeliverySettings = {
   pricing: DeliveryPricingConfig;
   hub: DeliveryHub;
+  shopperMarkupPct: number;
 };
 
 export const DEFAULT_DELIVERY_SETTINGS: DeliverySettings = {
   pricing: DEFAULT_DELIVERY_PRICING,
   hub: GSG_HUB,
+  shopperMarkupPct: DEFAULT_SHOPPER_MARKUP_PCT,
 };
 
 export function normalizeHub(raw: unknown): DeliveryHub {
@@ -41,6 +57,7 @@ export function normalizeDeliverySettings(raw: unknown): DeliverySettings {
   return {
     pricing: normalizeDeliveryPricing(src.pricing),
     hub: normalizeHub(src.hub),
+    shopperMarkupPct: normalizeShopperMarkupPct(src.shopperMarkupPct),
   };
 }
 

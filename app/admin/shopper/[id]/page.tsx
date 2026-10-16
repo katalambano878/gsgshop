@@ -115,6 +115,7 @@ const initials = (name?: string | null) =>
 export default function AdminShopperRequestDetail({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
   const [request, setRequest] = useState<ShopperRequest | null>(null);
+  const [markupPct, setMarkupPct] = useState(5);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [id, setId] = useState<string | null>(null);
@@ -126,6 +127,15 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
 
   useEffect(() => { params.then(p => setId(p.id)); }, [params]);
   useEffect(() => { if (id) fetchRequest(id); }, [id]);
+  useEffect(() => {
+    fetch('/api/delivery/settings')
+      .then((res) => res.json())
+      .then((data) => {
+        const n = Number(data?.settings?.shopperMarkupPct);
+        if (Number.isFinite(n)) setMarkupPct(n);
+      })
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     if (request) setDeliveryFeeInput(String(request.delivery_fee ?? 0));
   }, [request?.id, request?.delivery_fee]);
@@ -251,8 +261,9 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
   const liveTotal = useMemo(() => {
     const deliveryFee = parseFloat(deliveryFeeInput);
     const fee = Number.isFinite(deliveryFee) ? deliveryFee : 0;
-    return marketSubtotal * 1.05 + fee;
-  }, [marketSubtotal, deliveryFeeInput]);
+    const markup = Math.round(marketSubtotal * (markupPct / 100) * 100) / 100;
+    return marketSubtotal + markup + fee;
+  }, [marketSubtotal, deliveryFeeInput, markupPct]);
 
   const allItemsPriced = !!request && request.items.every(it => it.market_price !== null && Number(it.market_price) > 0);
 
@@ -711,7 +722,7 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                 <dd className="font-medium text-gray-700">{fmtGHS(request.subtotal_est)}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-gray-500">Est. markup (5%)</dt>
+                <dt className="text-gray-500">Est. markup</dt>
                 <dd className="font-medium text-gray-700">{fmtGHS(request.markup)}</dd>
               </div>
               <div className="flex justify-between border-t border-gray-100 pt-2.5">
@@ -729,8 +740,8 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                     <dd className="font-medium text-gray-700">{fmtGHS(marketSubtotal)}</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Markup (5%)</dt>
-                    <dd className="font-medium text-gray-700">{fmtGHS(marketSubtotal * 0.05)}</dd>
+                    <dt className="text-gray-500">Markup ({markupPct}%)</dt>
+                    <dd className="font-medium text-gray-700">{fmtGHS(Math.round(marketSubtotal * (markupPct / 100) * 100) / 100)}</dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-500">Delivery fee</dt>

@@ -34,3 +34,26 @@ export function useDeliveryPricing(): DeliveryPricingConfig {
 
   return config;
 }
+
+/** Personal Shopper markup percent from admin settings. Default 5 until loaded. */
+export function useShopperMarkupPct(): number {
+  const [pct, setPct] = useState(5);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/delivery/settings')
+      .then((res) => res.json())
+      .then((data) => {
+        const n = Number(data?.settings?.shopperMarkupPct);
+        if (!cancelled && Number.isFinite(n)) setPct(n);
+      })
+      .catch(() => {
+        // keep default
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return pct;
+}

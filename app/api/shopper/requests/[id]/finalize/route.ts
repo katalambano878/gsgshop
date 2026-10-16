@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { verifyAuth } from '@/lib/auth';
 import { sendShopperPaymentLink } from '@/lib/notifications';
+import { getDeliverySettings, shopperMarkupAmount } from '@/lib/delivery-settings';
 
 /**
  * Admin-only.
@@ -17,7 +18,7 @@ import { sendShopperPaymentLink } from '@/lib/notifications';
  *   }
  *
  * If totalFinal is not supplied we compute it from:
- *   sum(market_price ?? estimated_price) + markup(5% or less) + delivery_fee
+ *   sum(market_price ?? estimated_price) + markup (admin %) + delivery_fee
  *
  * Always responds with the updated row (or the existing one if no changes).
  */
@@ -69,8 +70,9 @@ export async function PATCH(
     // Re-derive markup off the (possibly updated) subtotal so we don't ship
     // an outdated markup number from when the customer first submitted the
     // list. Falls back to the row's stored markup if subtotal is zero.
+    const { shopperMarkupPct } = await getDeliverySettings();
     const markup = itemsSubtotal > 0
-        ? Math.round(itemsSubtotal * 0.05 * 100) / 100
+        ? shopperMarkupAmount(itemsSubtotal, shopperMarkupPct)
         : Number(req0.markup ?? 0);
 
     const deliveryFee = explicitDeliveryFee !== null

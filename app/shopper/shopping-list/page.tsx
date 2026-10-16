@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import DeliveryLocationPicker from '@/components/DeliveryLocationPicker';
 import { calculateDeliveryFee } from '@/lib/delivery-pricing';
-import { useDeliveryPricing } from '@/hooks/useDeliveryPricing';
+import { useDeliveryPricing, useShopperMarkupPct } from '@/hooks/useDeliveryPricing';
 
 const SHOPPER_DELIVERY_OPTIONS = [
   {
@@ -47,6 +47,7 @@ export default function ShoppingList() {
   const [deliveryPin, setDeliveryPin] = useState<{ lat: number; lng: number } | null>(null);
   const [deliveryMethod, setDeliveryMethod] = useState<'sole-express' | 'joint-express'>('sole-express');
   const pricingConfig = useDeliveryPricing();
+  const markupPct = useShopperMarkupPct();
   const [preferredTime, setPreferredTime] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
@@ -97,7 +98,7 @@ export default function ShoppingList() {
   };
 
   const subtotal = items.reduce((sum, item) => sum + (parseFloat(item.estimatedPrice) || 0), 0);
-  const markup = subtotal * 0.05;
+  const markup = Math.round(subtotal * (markupPct / 100) * 100) / 100;
   const kmValue = Math.max(0, parseFloat(deliveryKm) || 0);
   const deliveryBreakdown = useMemo(
     () =>
@@ -187,8 +188,8 @@ export default function ShoppingList() {
           </div>
           <dl className="grid w-full min-w-0 grid-cols-3 gap-3 text-stone-600 sm:w-auto sm:gap-8">
             <div className="min-w-0">
-              <dt className="font-serif text-2xl text-gsg-black">5%</dt>
-              <dd className="mt-0.5 text-[11px] leading-snug text-pretty sm:text-xs">markup or less</dd>
+              <dt className="font-serif text-2xl text-gsg-black tabular-nums">{markupPct}%</dt>
+              <dd className="mt-0.5 text-[11px] leading-snug text-pretty sm:text-xs">markup</dd>
             </div>
             <div className="min-w-0">
               <dt className="font-serif text-2xl text-gsg-black">Daily</dt>
@@ -482,7 +483,7 @@ export default function ShoppingList() {
                   <dd className="tabular-nums text-white">{ghs(subtotal)}</dd>
                 </div>
                 <div className="flex justify-between gap-4 text-white/70">
-                  <dt>Markup, 5% or less</dt>
+                  <dt>Markup, {markupPct}%</dt>
                   <dd className="tabular-nums text-white">{ghs(markup)}</dd>
                 </div>
                 <div className="flex justify-between gap-4 text-white/70">
