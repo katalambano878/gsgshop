@@ -26,15 +26,63 @@ function colorNameToHex(name: string): string {
   return map[name.toLowerCase().trim()] || '#d1d5db';
 }
 
-export default function ProductDetailClient({ slug }: { slug: string }) {
-  const [product, setProduct] = useState<any>(null);
+// Shape the raw products row (with categories, product_variants and
+// product_images joined) into what this page renders.
+function transformProduct(productData: any) {
+  // Map variant colors from option2, and extract color_hex from metadata
+  const rawVariants = (productData.product_variants || []).map((v: any) => ({
+    ...v,
+    color: v.option2 || '',
+    colorHex: v.metadata?.color_hex || ''
+  }));
+
+  // Build a color-to-hex map from variants (prefer stored hex, fallback to colorNameToHex)
+  const colorHexMap: Record<string, string> = {};
+  rawVariants.forEach((v: any) => {
+    if (v.color) {
+      if (!colorHexMap[v.color]) {
+        colorHexMap[v.color] = v.colorHex || colorNameToHex(v.color);
+      }
+    }
+  });
+
+  const transformedProduct = {
+    ...productData,
+    images: [...(productData.product_images || [])].sort((a: any, b: any) => a.position - b.position).map((img: any) => img.url),
+    category: productData.categories?.name || 'Shop',
+    rating: productData.rating_avg || 0,
+    reviewCount: 0,
+    stockCount: productData.quantity,
+    moq: productData.moq || 1,
+    colors: [...new Set(rawVariants.map((v: any) => v.color).filter(Boolean))],
+    colorHexMap,
+    variants: rawVariants,
+    sizes: rawVariants.map((v: any) => v.name) || [],
+    features: ['Premium Quality', 'Authentic Design'],
+    featured: ['Premium Quality', 'Authentic Design'],
+    care: 'Handle with care.',
+    preorderShipping: productData.metadata?.preorder_shipping || null
+  };
+
+  // Ensure at least one image/placeholder
+  if (transformedProduct.images.length === 0) {
+    transformedProduct.images = ['https://via.placeholder.com/800x800?text=No+Image'];
+  }
+
+  return transformedProduct;
+}
+
+export default function ProductDetailClient({ slug, initialProduct }: { slug: string; initialProduct?: any }) {
+  // When the server already loaded the product, render it straight away so
+  // the HTML search engines receive carries the real name, price and photos.
+  const [product, setProduct] = useState<any>(() => (initialProduct ? transformProduct(initialProduct) : null));
   usePageTitle(product?.name || 'Product');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialProduct);
   const [selectedImage, setSelectedImage] = useState(0);
   const [selectedVariant, setSelectedVariant] = useState<any>(null);
   const [selectedColor, setSelectedColor] = useState('');
   const [selectedSize, setSelectedSize] = useState('');
-  const [quantity, setQuantity] = useState(1);
+  const [quantity, setQuantity] = useState(() => (initialProduct?.moq > 1 ? initialProduct.moq : 1));
   const [activeTab, setActiveTab] = useState('description');
   const [isWishlisted, setIsWishlisted] = useState(false);
   const [relatedProducts, setRelatedProducts] = useState<any[]>([]);
@@ -44,92 +92,59 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
   useEffect(() => {
     async function fetchProduct() {
       try {
-        setLoading(true);
-        // Fetch main product (cached for 2 minutes)
-        const { data: productData, error } = await cachedQuery<{ data: any; error: any }>(
-          `product:${slug}`,
-          async () => {
-            let query = supabase
-              .from('products')
-              .select(`
-                *,
-                categories(name),
-                product_variants(*),
-                product_images(url, position, alt_text)
-              `);
+        let productData = initialProduct;
 
-            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slug);
+        // The server already rendered this product; only fetch it here when
+        // it didn't (e.g. a product the server query couldn't find).
+        if (!productData) {
+          setLoading(true);
+          // Fetch main product (cached for 2 minutes)
+          const { data: fetchedProduct, error } = await cachedQuery<{ data: any; error: any }>(
+            `product:${slug}`,
+            async () => {
+              let query = supabase
+                .from('products')
+                .select(`
+                  *,
+                  categories(name),
+                  product_variants(*),
+                  product_images(url, position, alt_text)
+                `);
 
-            if (isUUID) {
-              query = query.or(`id.eq.${slug},slug.eq.${slug}`);
-            } else {
-              query = query.eq('slug', slug);
-            }
+              const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slug);
 
-            return query.single() as any;
-          },
-          2 * 60 * 1000 // 2 minutes
-        );
+              if (isUUID) {
+                query = query.or(`id.eq.${slug},slug.eq.${slug}`);
+              } else {
+                query = query.eq('slug', slug);
+              }
 
-        if (error || !productData) {
-          console.error('Error fetching product:', error);
-          setLoading(false);
-          return;
-        }
+              return query.single() as any;
+            },
+            2 * 60 * 1000 // 2 minutes
+          );
 
-        // Transform product data
-        // Map variant colors from option2, and extract color_hex from metadata
-        const rawVariants = (productData.product_variants || []).map((v: any) => ({
-          ...v,
-          color: v.option2 || '',
-          colorHex: v.metadata?.color_hex || ''
-        }));
-
-        // Build a color-to-hex map from variants (prefer stored hex, fallback to colorNameToHex)
-        const colorHexMap: Record<string, string> = {};
-        rawVariants.forEach((v: any) => {
-          if (v.color) {
-            if (!colorHexMap[v.color]) {
-              colorHexMap[v.color] = v.colorHex || colorNameToHex(v.color);
-            }
+          if (error || !fetchedProduct) {
+            console.error('Error fetching product:', error);
+            setLoading(false);
+            return;
           }
-        });
 
-        const transformedProduct = {
-          ...productData,
-          images: productData.product_images?.sort((a: any, b: any) => a.position - b.position).map((img: any) => img.url) || [],
-          category: productData.categories?.name || 'Shop',
-          rating: productData.rating_avg || 0,
-          reviewCount: 0,
-          stockCount: productData.quantity,
-          moq: productData.moq || 1,
-          colors: [...new Set(rawVariants.map((v: any) => v.color).filter(Boolean))],
-          colorHexMap,
-          variants: rawVariants,
-          sizes: rawVariants.map((v: any) => v.name) || [],
-          features: ['Premium Quality', 'Authentic Design'],
-          featured: ['Premium Quality', 'Authentic Design'],
-          care: 'Handle with care.',
-          preorderShipping: productData.metadata?.preorder_shipping || null
-        };
+          productData = fetchedProduct;
+          const transformedProduct = transformProduct(fetchedProduct);
+          setProduct(transformedProduct);
 
-        // Ensure at least one image/placeholder
-        if (transformedProduct.images.length === 0) {
-          transformedProduct.images = ['https://via.placeholder.com/800x800?text=No+Image'];
+          // Set initial quantity to MOQ
+          if (transformedProduct.moq > 1) {
+            setQuantity(transformedProduct.moq);
+          }
+
+          // If variants exist, do NOT pre-select — force user to choose
+          // Reset variant and color selection
+          setSelectedVariant(null);
+          setSelectedSize('');
+          setSelectedColor('');
         }
-
-        setProduct(transformedProduct);
-
-        // Set initial quantity to MOQ
-        if (transformedProduct.moq > 1) {
-          setQuantity(transformedProduct.moq);
-        }
-
-        // If variants exist, do NOT pre-select — force user to choose
-        // Reset variant and color selection
-        setSelectedVariant(null);
-        setSelectedSize('');
-        setSelectedColor('');
 
         // Fetch related products (cached for 5 minutes)
         if (productData.category_id) {
@@ -179,7 +194,7 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
     if (slug) {
       fetchProduct();
     }
-  }, [slug]);
+  }, [slug, initialProduct]);
 
   const hasVariants = product?.variants?.length > 0;
   const hasColors = product?.colors?.length > 0;

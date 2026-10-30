@@ -101,6 +101,32 @@ export function createPageMetadata({
   };
 }
 
+/**
+ * Search description for a product. Most catalogue items have no description
+ * yet, so we fall back to a factual sentence built from the name, category
+ * and price rather than the same generic line on every page.
+ */
+export function productSeoDescription(product: {
+  name: string;
+  description?: string | null;
+  seo_description?: string | null;
+  price?: number | null;
+  categoryName?: string | null;
+}): string {
+  const own = (product.seo_description || product.description || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (own.length >= 40) return own.slice(0, 160);
+
+  const price = product.price && product.price > 0 ? ` for GH₵${product.price.toFixed(2)}` : '';
+  const category =
+    product.categoryName && product.categoryName !== 'Shop'
+      ? ` from our ${product.categoryName.trim()} range`
+      : '';
+  return `Buy ${product.name}${price}${category} at GSG Convenience Goods & More. Order online in Ghana with pickup in Accra or delivery nationwide.`.slice(0, 160);
+}
+
 /** Indexable static storefront routes for sitemap.xml */
 export const STORE_STATIC_ROUTES: {
   path: string;
@@ -194,7 +220,7 @@ export function generateOnlineStoreSchema() {
 export function generateProductSchema(product: {
   name: string;
   description: string;
-  image: string;
+  image: string | string[];
   price: number;
   currency?: string;
   sku: string;
@@ -212,14 +238,23 @@ export function generateProductSchema(product: {
     description: product.description,
     image: product.image,
     sku: product.sku,
-    brand: {
-      '@type': 'Brand',
-      name: product.brand || SITE_NAME,
-    },
-    offers: {
+    url: absoluteUrl(`/product/${product.slug}`),
+  };
+
+  // Only claim a real manufacturer brand. Labelling every product (Coca-Cola,
+  // Voltic, ...) with the store's own name is wrong data for Google.
+  if (product.brand) {
+    schema.brand = { '@type': 'Brand', name: product.brand };
+  }
+
+  // Google rejects offers priced at 0 and stops treating the page as a
+  // product listing, so an unpriced product publishes no offer at all.
+  if (product.price > 0) {
+    schema.offers = {
       '@type': 'Offer',
-      price: product.price,
+      price: product.price.toFixed(2),
       priceCurrency: product.currency || 'GHS',
+      itemCondition: 'https://schema.org/NewCondition',
       availability:
         product.availability === 'in_stock'
           ? 'https://schema.org/InStock'
@@ -232,8 +267,8 @@ export function generateProductSchema(product: {
         '@type': 'Organization',
         name: SITE_NAME,
       },
-    },
-  };
+    };
+  }
 
   if (product.rating && product.reviewCount) {
     schema.aggregateRating = {

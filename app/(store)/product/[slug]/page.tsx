@@ -6,6 +6,7 @@ import {
   createPageMetadata,
   generateBreadcrumbSchema,
   generateProductSchema,
+  productSeoDescription,
 } from '@/lib/seo';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -22,23 +23,18 @@ function resolveCategory(categories: { name: string; slug: string } | { name: st
   return categories;
 }
 
+// Same shape ProductDetailClient fetches, so the server can hand the product
+// over and the first HTML Google receives already shows name, price and photos.
 async function fetchProduct(slug: string) {
   const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slug);
 
   let query = supabase
     .from('products')
     .select(`
-      id,
-      name,
-      slug,
-      description,
-      price,
-      quantity,
-      sku,
-      rating_avg,
+      *,
       categories(name, slug),
-      product_images(url, position),
-      product_variants(id, price, quantity)
+      product_variants(*),
+      product_images(url, position, alt_text)
     `)
     .eq('status', 'active');
 
@@ -50,6 +46,13 @@ async function fetchProduct(slug: string) {
 
   const { data } = await query.single();
   return data;
+}
+
+function sortedImageUrls(product: { product_images?: { url: string; position: number }[] | null }): string[] {
+  return [...(product.product_images || [])]
+    .sort((a, b) => a.position - b.position)
+    .map((img) => img.url)
+    .filter(Boolean);
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -64,20 +67,30 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     };
   }
 
-  const mainImage = product.product_images
-    ?.sort((a: { position: number }, b: { position: number }) => a.position - b.position)[0]?.url;
-  const description =
-    product.description?.substring(0, 160) ||
-    `Buy ${product.name} online at GSG Convenience Goods & More. Fast delivery across Ghana.`;
+  const mainImage = sortedImageUrls(product)[0];
   const category = resolveCategory(product.categories);
+  const description = productSeoDescription({
+    name: product.name,
+    description: product.description,
+    seo_description: product.seo_description,
+    price: product.price,
+    categoryName: category.name,
+  });
+
+  // The layout's title template adds the store name, so drop it if an admin
+  // already typed it into the product's SEO title.
+  const seoTitle = (product.seo_title || '').split('|')[0].trim();
 
   return createPageMetadata({
-    title: product.name,
+    title: seoTitle || product.name,
     description,
     path: `/product/${product.slug || slug}`,
     keywords: [
       product.name,
       category.name || '',
+      product.brand || '',
+      `buy ${product.name} Ghana`,
+      `${product.name} price in Ghana`,
       'buy online Ghana',
       'GSG shop',
     ].filter(Boolean),
@@ -93,33 +106,40 @@ export default async function ProductDetailPage({ params }: Props) {
     return <ProductDetailClient slug={slug} />;
   }
 
-  const mainImage = product.product_images
-    ?.sort((a: { position: number }, b: { position: number }) => a.position - b.position)[0]?.url;
-  const variants = product.product_variants || [];
+  const images = sortedImageUrls(product);
+  const variants: { price: number; quantity: number }[] = product.product_variants || [];
   const hasVariants = variants.length > 0;
   const minVariantPrice = hasVariants
-    ? Math.min(...variants.map((v: { price: number }) => v.price || product.price))
+    ? Math.min(...variants.map((v) => v.price || product.price))
     : product.price;
   const totalVariantStock = hasVariants
-    ? variants.reduce((sum: number, v: { quantity: number }) => sum + (v.quantity || 0), 0)
+    ? variants.reduce((sum, v) => sum + (v.quantity || 0), 0)
     : 0;
   const effectiveStock = hasVariants ? totalVariantStock : product.quantity;
   const category = resolveCategory(product.categories);
   const categoryName = category.name || 'Shop';
   const categorySlug = category.slug || 'shop';
   const productSlug = product.slug || slug;
+  const description = productSeoDescription({
+    name: product.name,
+    description: product.description,
+    seo_description: product.seo_description,
+    price: hasVariants ? minVariantPrice : product.price,
+    categoryName,
+  });
 
   const productSchema = generateProductSchema({
     name: product.name,
-    description: product.description || `Buy ${product.name} at GSG Convenience Goods & More.`,
-    image: mainImage || absoluteUrl('/og-image.png'),
+    description,
+    image: images.length ? images : absoluteUrl('/og-image.png'),
     price: hasVariants ? minVariantPrice : product.price,
     currency: 'GHS',
     sku: product.sku || product.id,
     slug: productSlug,
     rating: product.rating_avg || undefined,
-    reviewCount: undefined,
-    availability: effectiveStock > 0 ? 'in_stock' : 'out_of_stock',
+    reviewCount: product.review_count || undefined,
+    availability: effectiveStock > 0 || product.continue_selling ? 'in_stock' : 'out_of_stock',
+    brand: product.brand || undefined,
     category: categoryName,
   });
 
@@ -140,7 +160,7 @@ export default async function ProductDetailPage({ params }: Props) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
       />
-      <ProductDetailClient slug={slug} />
+      <ProductDetailClient slug={slug} initialProduct={product} />
     </>
   );
 }

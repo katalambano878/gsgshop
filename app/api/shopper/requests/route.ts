@@ -109,9 +109,16 @@ export async function POST(request: Request) {
         created_by: userId
       });
 
+    // Return the server's own figures so callers (the WhatsApp assistant)
+    // quote exactly what the pay page will charge.
     return NextResponse.json({
       id: requestData.id,
       request_number: requestData.request_number,
+      subtotal_est: safeSubtotal,
+      markup: safeMarkup,
+      markup_pct: settings.shopperMarkupPct,
+      delivery_fee: deliveryFee,
+      total_est: totalEst,
       success: true,
     });
 

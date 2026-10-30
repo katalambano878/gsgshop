@@ -1,21 +1,43 @@
 import { getGoodsBaseUrl, getShopperBaseUrl } from '@/lib/site-urls';
+import { createClient } from '@supabase/supabase-js';
+import { getDeliverySettings } from '@/lib/delivery-settings';
 
 // Serves /llms.txt — an emerging standard that gives AI assistants
 // (ChatGPT, Claude, Perplexity, etc.) a concise, authoritative map of the
 // site so the brand is summarised and cited accurately in AI answers.
-export const dynamic = 'force-static';
 export const revalidate = 86400;
 
 export async function GET() {
   const goods = getGoodsBaseUrl();
+  const { shopperMarkupPct } = await getDeliverySettings();
   const shopper = getShopperBaseUrl();
+
+  // List what the store actually sells right now, so AI answers can cite
+  // real Convenience Goods products, not only the Personal Shopper pages.
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+  const { data: products } = await supabase
+    .from('products')
+    .select('name, slug, price, quantity, categories(name)')
+    .eq('status', 'active')
+    .gt('price', 0)
+    .order('name');
+  const productLines = (products || [])
+    .map((p) => {
+      const cat = (Array.isArray(p.categories) ? p.categories[0] : p.categories) as { name: string } | null;
+      const stock = p.quantity > 0 ? 'in stock' : 'out of stock';
+      return `- ${p.name.trim()}: GH₵${Number(p.price).toFixed(2)}, ${stock}${cat?.name ? `, ${cat.name.trim()}` : ''} (${goods}/product/${p.slug})`;
+    })
+    .join('\n');
 
   const body = `# GSG Convenience Goods & More
 
 > GSG Convenience Goods & More is a Ghanaian online convenience store delivering
 > groceries, household essentials, personal care, stationery, phones, electronics
 > and fashion across Accra and nationwide. It also operates a Personal Shopper
-> service that sources any item at market price with a 5% or less Markup.
+> service that sources any item at market price with a ${shopperMarkupPct}% markup.
 
 ## About
 - Name: GSG Convenience Goods & More
@@ -47,10 +69,13 @@ export async function GET() {
 - Customer experience: ${shopper}/customer-experience
 
 ## Key facts
-- Personal Shopper markup: 5% or less Markup on the item subtotal, no hidden fees.
-- Delivery fee depends on the delivery option and destination distance.
+- Personal Shopper markup: ${shopperMarkupPct}% on the item subtotal, no hidden fees.
+- Delivery fee is calculated from road distance and shown at checkout before payment. Pickup is free.
 - Fresh/perishable items must use Sole Express or Joint Express.
-- Free Delivery runs Tuesdays and Fridays for qualifying orders (5% discount).
+- Free Delivery runs Tuesdays and Fridays; a share of the order total comes off the fee, so larger orders can ship for GH₵0.
+
+## Products available in the online store
+${productLines || `- See the shop: ${goods}/shop`}
 
 ## Legal
 - Terms: ${goods}/terms
