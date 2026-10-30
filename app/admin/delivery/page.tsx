@@ -237,7 +237,7 @@ export default function AdminDeliveryPricingPage() {
             <p className="text-xs text-gray-500 mb-5">
               Added on top of the item subtotal. Keep it low while you are attracting customers, then raise it here. 0 turns it off. Maximum 30.
             </p>
-            {numField('Markup', 'shopperMarkupPct', 'Default 5%. Applies to new lists and when you finalize a request.', { suffix: '%', step: '0.1' })}
+            {numField('Markup', 'shopperMarkupPct', 'Default 5%, maximum 15% (the site promises "15% or less"). Applies to new lists and when you finalize a request.', { suffix: '%', step: '0.1' })}
           </div>
 
           {/* Hub */}

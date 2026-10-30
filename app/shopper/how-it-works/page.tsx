@@ -5,7 +5,7 @@ import { createShopperPageMetadata } from '@/lib/seo';
 export const metadata = createShopperPageMetadata({
   title: 'How It Works',
   description:
-    'See how My Personal Shopper by GSG works — create your list, we source at market price with 5% or less Markup, then deliver to your door in Ghana.',
+    'See how My Personal Shopper by GSG works — create your list, we source at market price with 15% or less Markup, then deliver to your door in Ghana.',
   path: '/how-it-works',
   keywords: [
     'how personal shopper works Ghana',
@@ -34,7 +34,7 @@ const STEPS = [
     title: 'Transparent Fees',
     icon: 'ri-percent-line',
     content:
-      'We charge a 5% or less Markup on item subtotal. Delivery fee is based on distance. If a rare sourcing fee is needed, we always agree with you first.',
+      'We charge a 15% or less Markup on item subtotal. Delivery fee is based on distance. If a rare sourcing fee is needed, we always agree with you first.',
   },
   {
     id: '04',

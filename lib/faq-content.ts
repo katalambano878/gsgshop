@@ -141,11 +141,11 @@ export const STORE_FAQS = [
 export const SHOPPER_FAQS: { q: string; a: string }[] = [
   {
     q: "How does the Personal Shopper service work?",
-    a: "Simply create a shopping list on our website with the items you need and your estimated prices. We will review it, source the items at market price, and deliver them to your door. You pay a 5% or less Markup on the subtotal."
+    a: "Simply create a shopping list on our website with the items you need and your estimated prices. We will review it, source the items at market price, and deliver them to your door. You pay a 15% or less Markup on the subtotal."
   },
   {
     q: "What is the markup fee?",
-    a: "We charge a 5% or less Markup on the total cost of the items we purchase for you."
+    a: "We charge a 15% or less Markup on the total cost of the items we purchase for you."
   },
   {
     q: "How is the delivery fee calculated?",
@@ -153,7 +153,7 @@ export const SHOPPER_FAQS: { q: string; a: string }[] = [
   },
   {
     q: "Are there any hidden fees?",
-    a: "No. You pay the exact market price for the goods, plus our 5% or less Markup, and the delivery fee. In rare cases, a sourcing fee may apply for hard-to-find items, but we will always ask for your approval first."
+    a: "No. You pay the exact market price for the goods, plus our 15% or less Markup, and the delivery fee. In rare cases, a sourcing fee may apply for hard-to-find items, but we will always ask for your approval first."
   },
   {
     q: "What if the actual market price is higher than my estimate?",

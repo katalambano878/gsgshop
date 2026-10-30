@@ -14,13 +14,15 @@ import {
 
 export const DELIVERY_SETTINGS_KEY = 'delivery_pricing';
 
-/** Personal Shopper markup on the item subtotal. 5 means 5%. */
+/** Personal Shopper markup on the item subtotal. 5 means 5%. The site promises "15% or less", so 15 is the ceiling. */
 export const DEFAULT_SHOPPER_MARKUP_PCT = 5;
+
+export const SHOPPER_MARKUP_MAX_PCT = 15;
 
 export function normalizeShopperMarkupPct(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return DEFAULT_SHOPPER_MARKUP_PCT;
-  return Math.min(30, Math.max(0, Math.round(n * 10) / 10));
+  return Math.min(SHOPPER_MARKUP_MAX_PCT, Math.max(0, Math.round(n * 10) / 10));
 }
 
 export function shopperMarkupAmount(subtotal: number, pct: number): number {

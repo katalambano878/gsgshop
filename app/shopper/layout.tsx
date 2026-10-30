@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     default: 'My Personal Shopper by GSG | List Them, We Shop For You in Ghana',
   },
   description:
-    'Ghana\'s premium personal shopper service. Send us your shopping list — we source quality, fresh, and hard-to-find items at the exact source price. 5% or less Markup. Same-day delivery in Accra.',
+    'Ghana\'s premium personal shopper service. Send us your shopping list — we source quality, fresh, and hard-to-find items at the exact source price. 15% or less Markup. Same-day delivery in Accra.',
   keywords: [
     'personal shopper Ghana',
     'personal shopper Accra',
@@ -68,14 +68,14 @@ export const metadata: Metadata = {
     url: shopperUrl,
     title: 'My Personal Shopper by GSG | List Them, We Shop For You',
     description:
-      'Send us your list — we source at the exact market price. 5% or less Markup. Same-day delivery in Accra. Quality, fresh, and hard-to-find goods, all delivered to your door.',
+      'Send us your list — we source at the exact market price. 15% or less Markup. Same-day delivery in Accra. Quality, fresh, and hard-to-find goods, all delivered to your door.',
     siteName: 'My Personal Shopper by GSG',
   },
   twitter: {
     card: 'summary_large_image',
     title: 'My Personal Shopper by GSG | List Them, We Shop For You',
     description:
-      'Ghana\'s premium personal shopper service. Source price guaranteed. 5% or less Markup. WhatsApp updates, 24/7.',
+      'Ghana\'s premium personal shopper service. Source price guaranteed. 15% or less Markup. WhatsApp updates, 24/7.',
     creator: '@gsgbrandsgh',
   },
   alternates: {
@@ -121,7 +121,7 @@ const SHOPPER_JSON_LD = {
   offers: {
     '@type': 'Offer',
     description:
-      'Source price + 5% or less Markup on items + delivery based on distance.',
+      'Source price + 15% or less Markup on items + delivery based on distance.',
     priceCurrency: 'GHS',
     availability: 'https://schema.org/InStock',
   },

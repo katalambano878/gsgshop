@@ -4,7 +4,7 @@ import { SHOPPER_FAQS } from '@/lib/faq-content';
 export const metadata = createShopperPageMetadata({
   title: 'FAQ',
   description:
-    'Answers about My Personal Shopper by GSG — how the service works, the 5% or less Markup, delivery fees, payments, produce sourcing and tracking your request in Ghana.',
+    'Answers about My Personal Shopper by GSG — how the service works, the 15% or less Markup, delivery fees, payments, produce sourcing and tracking your request in Ghana.',
   path: '/faqs',
   keywords: ['personal shopper FAQ Ghana', 'markup fee', 'delivery fee Accra'],
 });

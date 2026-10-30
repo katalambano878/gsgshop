@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getDeliverySettings } from '@/lib/delivery-settings';
+import { getDeliverySettings, SHOPPER_MARKUP_MAX_PCT } from '@/lib/delivery-settings';
 import { STORE_FAQS, SHOPPER_FAQS } from '@/lib/faq-content';
 
 /**
@@ -68,6 +68,7 @@ export async function GET() {
       personalShopper: {
         markupPct: settings.shopperMarkupPct,
         markupLabel: `${settings.shopperMarkupPct}% markup on the item subtotal`,
+        markupCeilingPct: SHOPPER_MARKUP_MAX_PCT,
       },
       delivery: {
         hub: settings.hub.label,
@@ -113,10 +114,11 @@ export async function GET() {
       },
       faqs: {
         store: STORE_FAQS.map((f) => ({ category: f.category, question: f.question, answer: f.answer })),
-        // The FAQ copy says "5% or less"; quote the rate the pay page charges.
+        // The FAQ copy states the ceiling ("15% or less"); quote the rate the pay
+        // page charges today and keep the ceiling.
         personalShopper: SHOPPER_FAQS.map((f) => ({
           question: f.q,
-          answer: f.a.replace(/5% or less Markup/gi, `${settings.shopperMarkupPct}% markup`),
+          answer: f.a.replace(/15% or less Markup/gi, `${settings.shopperMarkupPct}% markup (never more than 15%)`),
         })),
       },
       catalog: {
