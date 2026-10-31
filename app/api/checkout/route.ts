@@ -37,7 +37,8 @@ import { getDeliverySettings } from '@/lib/delivery-settings';
  * bind the order to that user's auth.uid().
  *
  * Response:
- *   { success: true, orderId, orderNumber, total, trackingNumber }
+ *   { success: true, orderId, orderNumber, total, subtotal, shippingTotal,
+ *     shippingMethod, trackingNumber }
  *   { success: false, message }
  */
 
@@ -335,6 +336,9 @@ export async function POST(req: Request) {
             orderId: order.id,
             orderNumber: order.order_number,
             total: Number(order.total),
+            subtotal,
+            shippingTotal: shippingCost,
+            shippingMethod: deliveryMethod,
             trackingNumber,
         });
     } catch (err: any) {
