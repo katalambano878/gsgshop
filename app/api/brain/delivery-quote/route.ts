@@ -56,6 +56,17 @@ export async function POST(req: Request) {
     return { method: m.id, name: m.name, fee: fee.fee };
   });
 
+  // Free Delivery shrinks by a share of the order total; tell the assistant
+  // the order size at which it reaches GH₵0 so it can say so plainly.
+  const freeBase = calculateDeliveryFee({
+    method: 'free-delivery',
+    km: distance.km,
+    purchaseTotal: 0,
+    config: pricing,
+  }).fee;
+  const freeDeliveryFromSubtotal =
+    pricing.freePurchasePct > 0 ? Math.ceil(freeBase / pricing.freePurchasePct) : null;
+
   return NextResponse.json({
     success: true,
     location: distance.shortLabel || distance.label,
@@ -64,6 +75,7 @@ export async function POST(req: Request) {
     hub: distance.hub,
     subtotal,
     quotes,
+    freeDeliveryFromSubtotal,
     note: 'Fees match checkout for this location and order subtotal. Final fee shows at checkout before payment.',
   });
 }
