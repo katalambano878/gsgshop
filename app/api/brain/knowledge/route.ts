@@ -73,7 +73,7 @@ export async function GET() {
       delivery: {
         hub: settings.hub.label,
         feeNote:
-          'Delivery fees are calculated from road distance to the GSG hub and shown at checkout before payment. Pickup is free.',
+          `Delivery fees are calculated from road distance to the GSG hub and shown at checkout before payment. Pickup is free. Outside Greater Accra we deliver to ${settings.transportStation.label} and charge from the hub to there; the customer pays the commercial transport charge to their town on top, directly to the transport company.`,
         methods: [
           {
             id: 'sole-express',

@@ -18,6 +18,9 @@ export type DeliveryLocationResult = {
   region?: string | null;
   lat?: number;
   lng?: number;
+  /** Delivered to a transport station in Accra; transport charges extra. */
+  outsideGreaterAccra?: boolean;
+  transportStation?: string;
 };
 
 type Suggestion = {
@@ -50,6 +53,8 @@ type DistanceResponse = {
   lng: number;
   method?: 'road' | 'estimated';
   hub?: string;
+  outsideGreaterAccra?: boolean;
+  transportStation?: string;
 };
 
 const FETCH_TIMEOUT_MS = 9000;
@@ -86,6 +91,7 @@ export default function DeliveryLocationPicker({
     lat: number;
     lng: number;
     method: 'road' | 'estimated';
+    transportStation?: string;
   } | null>(null);
 
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -143,6 +149,7 @@ export default function DeliveryLocationPicker({
       lat: data.lat,
       lng: data.lng,
       method: data.method === 'estimated' ? 'estimated' : 'road',
+      transportStation: data.outsideGreaterAccra ? data.transportStation : undefined,
     });
     setStatus(null);
     if (data.hub) setHubLabel(data.hub);
@@ -153,6 +160,8 @@ export default function DeliveryLocationPicker({
       region: data.region,
       lat: data.lat,
       lng: data.lng,
+      outsideGreaterAccra: Boolean(data.outsideGreaterAccra),
+      transportStation: data.transportStation,
     });
     callbacksRef.current.onPlaceFill?.({
       city: data.city || undefined,
@@ -386,6 +395,7 @@ export default function DeliveryLocationPicker({
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-green-900 tabular-nums">
                     {kmNum.toFixed(1)} km from {hubShort.split(',')[0]}
+                    {selected.transportStation ? ` to ${selected.transportStation.split(',')[0]}` : ''}
                     {selected.method === 'estimated' && (
                       <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-green-800/70">
                         approx.
@@ -393,6 +403,12 @@ export default function DeliveryLocationPicker({
                     )}
                   </p>
                   <p className="text-xs text-green-800/80 mt-0.5 text-pretty">{selected.shortLabel}</p>
+                  {selected.transportStation && (
+                    <p className="mt-1.5 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 text-pretty">
+                      Outside Greater Accra: this fee covers delivery from our hub to {selected.transportStation}.
+                      Commercial transport charges to {selected.shortLabel.split(',')[0]} are extra, paid to the transport company.
+                    </p>
+                  )}
                   <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
                     <a
                       href={`https://www.google.com/maps/search/?api=1&query=${selected.lat},${selected.lng}`}

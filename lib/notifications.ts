@@ -12,7 +12,7 @@ const BRAND = {
     colorLight: '#eff6ff',
     colorDark: '#064e3b',
     url: (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, ''),
-    phone: '+233209597443',
+    phone: '+233246033792',
 };
 
 // Reusable branded email layout

@@ -75,6 +75,8 @@ export async function POST(req: Request) {
     hub: distance.hub,
     subtotal,
     quotes,
+    outsideGreaterAccra: Boolean(distance.outsideGreaterAccra),
+    transportStation: distance.outsideGreaterAccra ? distance.transportStation : undefined,
     freeDeliveryFromSubtotal,
     note: 'Fees match checkout for this location and order subtotal. Final fee shows at checkout before payment.',
   });

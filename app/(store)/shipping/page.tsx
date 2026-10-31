@@ -71,13 +71,13 @@ export default function ShippingPage() {
     },
     {
       zone: 'Zone 3 — Major Cities',
-      areas: 'Kumasi, Takoradi, Cape Coast, Tamale, Sunyani, Ho, Koforidua',
+      areas: 'Kumasi, Takoradi, Cape Coast, Tamale, Sunyani, Ho, Koforidua. We deliver to a commercial transport station in Accra; transport charges to your town are extra.',
       freeDelivery: 'Fri only',
       express: '24hr–48hr windows',
     },
     {
       zone: 'Zone 4 — Other Areas',
-      areas: 'All other locations within Ghana',
+      areas: 'All other locations within Ghana, via a commercial transport station in Accra (transport charges extra)',
       freeDelivery: 'Contact us',
       express: 'Contact us',
     },
@@ -312,7 +312,7 @@ export default function ShippingPage() {
                 {
                   icon: 'ri-shield-check-line',
                   title: 'Package Security',
-                  text: 'Report damage or missing items within 48 hours so we can resolve quickly.',
+                  text: 'Report damage or missing items within 24 hours so we can resolve quickly.',
                 },
               ].map((item) => (
                 <div key={item.title} className="flex gap-3">

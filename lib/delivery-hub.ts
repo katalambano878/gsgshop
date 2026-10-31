@@ -14,6 +14,36 @@ export const GSG_HUB: DeliveryHub = {
   label: 'GSG Hub — GCB Bank Head Office, Thorpe Link, Accra',
 };
 
+/**
+ * Outside Greater Accra we deliver to a commercial transport station in
+ * Accra; the customer pays the transport company's own charge on top.
+ * Admin can override in Delivery Pricing settings.
+ */
+export const GSG_TRANSPORT_STATION: DeliveryHub = {
+  lat: 5.5717,
+  lng: -0.2177,
+  label: 'Kwame Nkrumah Circle transport station, Accra',
+};
+
+const OTHER_REGIONS =
+  /ashanti|central|western|eastern|volta|northern|upper east|upper west|bono|ahafo|oti|savannah|north east/i;
+
+/**
+ * True when a place is outside Greater Accra. Uses the geocoder's region
+ * when it names one, otherwise a rough Greater Accra bounding box.
+ */
+export function isOutsideGreaterAccra(region: string | null | undefined, point: LatLng): boolean {
+  if (region && /greater accra/i.test(region)) return false;
+  // Kasoa sits just over the Central Region line but is served as part of
+  // Greater Accra (Zone 2 on the shipping page).
+  const inKasoa = point.lat >= 5.47 && point.lat <= 5.6 && point.lng >= -0.5 && point.lng <= -0.38;
+  if (inKasoa) return false;
+  if (region && OTHER_REGIONS.test(region)) return true;
+  const inGreaterAccraBox =
+    point.lat >= 5.45 && point.lat <= 6.1 && point.lng >= -0.55 && point.lng <= 0.7;
+  return !inGreaterAccraBox;
+}
+
 /** Straight-line km (Haversine). */
 export function haversineKm(a: LatLng, b: LatLng): number {
   const R = 6371;

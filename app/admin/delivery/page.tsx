@@ -7,7 +7,7 @@ import {
   normalizeDeliveryPricing,
   type DeliveryPricingConfig,
 } from '@/lib/delivery-pricing';
-import { GSG_HUB } from '@/lib/delivery-hub';
+import { GSG_HUB, GSG_TRANSPORT_STATION } from '@/lib/delivery-hub';
 
 type FormState = {
   ratePerKm: string;
@@ -21,6 +21,9 @@ type FormState = {
   hubLabel: string;
   hubLat: string;
   hubLng: string;
+  stationLabel: string;
+  stationLat: string;
+  stationLng: string;
   shopperMarkupPct: string;
 };
 
@@ -35,13 +38,17 @@ const EMPTY_FORM: FormState = {
   hubLabel: '',
   hubLat: '',
   hubLng: '',
+  stationLabel: '',
+  stationLat: '',
+  stationLng: '',
   shopperMarkupPct: '5',
 };
 
 function toForm(
   pricing: DeliveryPricingConfig,
   hub: { label: string; lat: number; lng: number },
-  shopperMarkupPct = 5
+  shopperMarkupPct = 5,
+  station: { label: string; lat: number; lng: number } = GSG_TRANSPORT_STATION
 ): FormState {
   return {
     ratePerKm: String(pricing.ratePerKm),
@@ -54,6 +61,9 @@ function toForm(
     hubLabel: hub.label,
     hubLat: String(hub.lat),
     hubLng: String(hub.lng),
+    stationLabel: station.label,
+    stationLat: String(station.lat),
+    stationLng: String(station.lng),
     shopperMarkupPct: String(Number.isFinite(shopperMarkupPct) ? shopperMarkupPct : 5),
   };
 }
@@ -76,7 +86,8 @@ export default function AdminDeliveryPricingPage() {
           setForm(toForm(
             normalizeDeliveryPricing(data.settings.pricing),
             data.settings.hub || GSG_HUB,
-            Number(data.settings.shopperMarkupPct)
+            Number(data.settings.shopperMarkupPct),
+            data.settings.transportStation || GSG_TRANSPORT_STATION
           ));
         } else {
           setForm(toForm(normalizeDeliveryPricing(null), GSG_HUB));
@@ -121,6 +132,11 @@ export default function AdminDeliveryPricingPage() {
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         throw new Error('Hub latitude/longitude must be valid numbers.');
       }
+      const stationLat = parseFloat(form.stationLat);
+      const stationLng = parseFloat(form.stationLng);
+      if (!Number.isFinite(stationLat) || !Number.isFinite(stationLng)) {
+        throw new Error('Transport station latitude/longitude must be valid numbers.');
+      }
 
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error('Session expired — please log in again.');
@@ -134,6 +150,7 @@ export default function AdminDeliveryPricingPage() {
         body: JSON.stringify({
           pricing: draftPricing,
           hub: { label: form.hubLabel.trim(), lat, lng },
+          transportStation: { label: form.stationLabel.trim(), lat: stationLat, lng: stationLng },
           shopperMarkupPct: parseFloat(form.shopperMarkupPct),
         }),
       });
@@ -143,7 +160,8 @@ export default function AdminDeliveryPricingPage() {
       setForm(toForm(
         normalizeDeliveryPricing(data.settings.pricing),
         data.settings.hub,
-        Number(data.settings.shopperMarkupPct)
+        Number(data.settings.shopperMarkupPct),
+        data.settings.transportStation
       ));
       setMessage({ type: 'success', text: 'Saved. New orders use these values immediately.' });
     } catch (err: any) {
@@ -235,7 +253,7 @@ export default function AdminDeliveryPricingPage() {
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
             <h2 className="text-lg font-bold text-gray-900 mb-1">Personal Shopper markup</h2>
             <p className="text-xs text-gray-500 mb-5">
-              Added on top of the item subtotal. Keep it low while you are attracting customers, then raise it here. 0 turns it off. Maximum 30.
+              Added on top of the item subtotal. Keep it low while you are attracting customers, then raise it here. 0 turns it off. Maximum 15.
             </p>
             {numField('Markup', 'shopperMarkupPct', 'Default 5%, maximum 15% (the site promises "15% or less"). Applies to new lists and when you finalize a request.', { suffix: '%', step: '0.1' })}
           </div>
@@ -268,6 +286,39 @@ export default function AdminDeliveryPricingPage() {
                 className="inline-flex items-center gap-1.5 text-sm font-semibold text-purple-700 hover:underline"
               >
                 <i className="ri-map-pin-line" /> Preview hub point on Google Maps
+              </a>
+            </div>
+          </div>
+
+          {/* Transport station */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">Transport station (outside Greater Accra)</h2>
+            <p className="text-xs text-gray-500 mb-5">
+              Orders outside Greater Accra are delivered to this commercial transport station, and the fee is
+              charged from the hub to here. Checkout tells the customer the transport charge to their town is extra.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Station name</label>
+                <input
+                  type="text"
+                  value={form.stationLabel}
+                  onChange={set('stationLabel')}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none"
+                  placeholder="e.g. Kwame Nkrumah Circle transport station, Accra"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                {numField('Latitude', 'stationLat', 'From Google Maps (right-click → copy coordinates).', { step: '0.000001' })}
+                {numField('Longitude', 'stationLng', 'Negative for west of Greenwich (Accra ≈ −0.20).', { step: '0.000001' })}
+              </div>
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${form.stationLat},${form.stationLng}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-sm font-semibold text-purple-700 hover:underline"
+              >
+                <i className="ri-map-pin-line" /> Preview station on Google Maps
               </a>
             </div>
           </div>

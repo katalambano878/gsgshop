@@ -18,7 +18,7 @@ export const STORE_FAQS = [
     category: 'orders',
     question: 'Can I modify or cancel my order?',
     answer:
-      "Yes — as long as it hasn't been dispatched yet. Contact us via WhatsApp at +233 20 959 7443 or email info@gsgbrands.com.gh and we'll make the change at no cost. If your order is already on its way, you'll need to cover the delivery cost already incurred (and any return-trip cost) before we can cancel or modify. Perishable items can't be cancelled once dispatched.",
+      "Yes — as long as it hasn't been dispatched yet. WhatsApp or call us on +233 24 603 3792 or +233 57 903 3792, or email info@gsgbrands.com.gh and we'll make the change at no cost. If your order is already on its way, you'll need to cover the delivery cost already incurred (and any return-trip cost) before we can cancel or modify. Perishable items can't be cancelled once dispatched.",
   },
   {
     category: 'orders',
@@ -30,7 +30,7 @@ export const STORE_FAQS = [
     category: 'orders',
     question: 'What if I receive the wrong item?',
     answer:
-      "We sincerely apologise if you receive the wrong item. Contact us within 48 hours with photos of the item received. We'll arrange for the correct item to be sent immediately and collect the wrong item at no cost to you.",
+      "We sincerely apologise if you receive the wrong item. Contact us within 24 hours of delivery with photos of the item received. We'll arrange for the correct item to be sent immediately and collect the wrong item at no cost to you.",
   },
   {
     category: 'shipping',
@@ -43,6 +43,12 @@ export const STORE_FAQS = [
     question: 'How much does shipping cost?',
     answer:
       'Your delivery total is calculated from your delivery location and shown clearly at checkout before you pay. At checkout, search your area or landmark — we work out the distance for you. Pickup has no delivery fee. Sole Express, Joint Express, and Free Delivery (Tue/Fri) each show their final amount once your location is set.',
+  },
+  {
+    category: 'shipping',
+    question: 'Do you deliver outside Greater Accra?',
+    answer:
+      'Yes. For Kumasi, Takoradi, Cape Coast and anywhere else outside Greater Accra, we deliver your order to a commercial transport station in Accra using the delivery option you pick at checkout, and the fee shown covers hub to station. The commercial transport charge from the station to your town is extra and is paid to the transport company.',
   },
   {
     category: 'shipping',
@@ -60,7 +66,7 @@ export const STORE_FAQS = [
     category: 'returns',
     question: 'What is your return policy?',
     answer:
-      'We offer a 14-day return policy for unused items in original packaging. Simply initiate a return from your account, print the return label, and ship it back. Refunds are processed within 5-7 business days after we receive the item.',
+      'You can return unused items in their original packaging within 24 hours of delivery. Simply initiate a return from your account, print the return label, and ship it back. Refunds are processed within 5-7 business days after we receive the item.',
   },
   {
     category: 'returns',

@@ -4,6 +4,7 @@ import {
   distanceFromHubKm,
   estimateRoadKm,
   haversineKm,
+  isOutsideGreaterAccra,
   searchPopularPlaces,
   type LatLng,
 } from '@/lib/delivery-hub';
@@ -197,8 +198,19 @@ type ResolveInput = {
   kmPromise?: Promise<number | null>;
 };
 
+// Hub → transport station barely changes; route it once per process.
+let stationKmCache: { key: string; km: number } | null = null;
+
+async function hubToStationKm(hub: LatLng, station: LatLng): Promise<number> {
+  const key = `${hub.lat},${hub.lng}>${station.lat},${station.lng}`;
+  if (stationKmCache?.key === key) return stationKmCache.km;
+  const km = (await roadKm(station, hub)) ?? estimateRoadKm(haversineKm(hub, station));
+  stationKmCache = { key, km };
+  return km;
+}
+
 async function resolveDistance(input: ResolveInput) {
-  const { hub } = await getDeliverySettings();
+  const { hub, transportStation } = await getDeliverySettings();
   const routedKm = await (input.kmPromise ?? roadKm(input.point, hub));
   const km = routedKm ?? estimateRoadKm(haversineKm(hub, input.point));
   const method = routedKm != null ? 'road' : 'estimated';
@@ -211,6 +223,28 @@ async function resolveDistance(input: ResolveInput) {
       },
       { status: 400 }
     );
+  }
+
+  // Outside Greater Accra: our fee covers hub → transport station only; the
+  // customer pays the commercial transport charge to their town separately.
+  if (isOutsideGreaterAccra(input.region, input.point)) {
+    const stationKm = await hubToStationKm(hub, transportStation);
+    return NextResponse.json({
+      success: true,
+      km: stationKm,
+      destinationKm: km,
+      outsideGreaterAccra: true,
+      transportStation: transportStation.label,
+      label: input.label,
+      shortLabel: input.shortLabel || input.label.split(',').slice(0, 2).map((s) => s.trim()).join(', '),
+      city: input.city ?? null,
+      region: input.region ?? null,
+      lat: input.point.lat,
+      lng: input.point.lng,
+      source: input.source,
+      method,
+      hub: hub.label,
+    });
   }
 
   return NextResponse.json({
@@ -353,7 +387,10 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const q = (searchParams.get('q') || '').trim();
-  const { hub } = await getDeliverySettings();
+  const { hub, transportStation } = await getDeliverySettings();
+  const stationKm = distanceFromHubKm(transportStation, hub);
+  const suggestionKm = (point: LatLng, region?: string | null) =>
+    isOutsideGreaterAccra(region, point) ? stationKm : distanceFromHubKm(point, hub);
 
   type SuggestionRow = {
     id: string;
@@ -375,7 +412,7 @@ export async function GET(req: Request) {
     region: p.region,
     lat: p.lat,
     lng: p.lng,
-    km: distanceFromHubKm({ lat: p.lat, lng: p.lng }, hub),
+    km: suggestionKm({ lat: p.lat, lng: p.lng }, p.region),
     source: 'popular',
   }));
 
@@ -391,7 +428,7 @@ export async function GET(req: Request) {
       region: h.region || '',
       lat: h.point.lat,
       lng: h.point.lng,
-      km: distanceFromHubKm(h.point, hub),
+      km: suggestionKm(h.point, h.region),
       source: 'geocode',
     }));
   }

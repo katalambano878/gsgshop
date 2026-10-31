@@ -39,7 +39,7 @@ const categories = [
     articles: [
       { id: 11, title: 'What payment methods do you accept?', views: 1654 },
       { id: 12, title: 'Is my payment information secure?', views: 1234 },
-      { id: 13, title: 'Can I pay in installments?', views: 987 },
+      { id: 13, title: 'No instalment or subscription payments', views: 987 },
       { id: 14, title: 'Do you accept gift cards?', views: 543 },
       { id: 15, title: 'Why was my payment declined?', views: 432 }
     ]
