@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
 import { usePageTitle } from '@/hooks/usePageTitle';
 
 export default function PaymentPage() {
@@ -20,13 +19,15 @@ export default function PaymentPage() {
   useEffect(() => {
     async function fetchOrder() {
       try {
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(orderId));
-        const baseQuery = supabase.from('orders').select('*');
-        const { data, error: fetchError } = isUuid
-          ? await baseQuery.eq('id', orderId).maybeSingle()
-          : await baseQuery.eq('order_number', orderId).maybeSingle();
+        // Guests can't read orders through the anon client (RLS), so the
+        // server looks the order up and returns only what this page shows.
+        const res = await fetch(`/api/payment/order/${encodeURIComponent(String(orderId))}`, {
+          cache: 'no-store',
+        });
+        const json = await res.json().catch(() => null);
+        const data = json?.success ? json.order : null;
 
-        if (fetchError || !data) {
+        if (!data) {
           setError('Order not found. Please check your link and try again.');
           setLoading(false);
           return;
@@ -77,7 +78,6 @@ export default function PaymentPage() {
         body: JSON.stringify({
           orderId: order.order_number,
           amount: order.total,
-          customerEmail: order.email,
         }),
       });
 

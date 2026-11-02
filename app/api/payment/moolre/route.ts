@@ -46,7 +46,9 @@ export async function POST(req: Request) {
             return NextResponse.json({ success: false, message: 'Order is already paid' }, { status: 400 });
         }
 
-        const amount = Number(target.amount);
+        // Moolre rejects amounts with float noise (116.33999999999999), so
+        // send whole pesewas.
+        const amount = Math.round(Number(target.amount) * 100) / 100;
         if (!amount || amount <= 0) {
             return NextResponse.json(
                 {
@@ -77,7 +79,7 @@ export async function POST(req: Request) {
 
         const payload = {
             type: 1,
-            amount: amount.toString(),
+            amount: amount.toFixed(2),
             email: process.env.MOOLRE_MERCHANT_EMAIL || 'admin@gsgbrands.com.gh',
             externalref: uniqueRef,
             callback: `${baseUrl}/api/payment/moolre/callback`,

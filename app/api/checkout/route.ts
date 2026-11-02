@@ -246,9 +246,13 @@ export async function POST(req: Request) {
             purchaseTotal: subtotal,
             config: deliverySettings.pricing,
         });
-        const shippingCost = delivery.fee;
+        // Money is stored to the pesewa: raw float sums like 23.99 + 92.35
+        // give 116.33999999999999, which Moolre rejects.
+        const toPesewa = (n: number) => Math.round(n * 100) / 100;
+        subtotal = toPesewa(subtotal);
+        const shippingCost = toPesewa(delivery.fee);
         const tax = 0;
-        const total = subtotal + shippingCost + tax;
+        const total = toPesewa(subtotal + shippingCost + tax);
         if (!Number.isFinite(total) || total <= 0) return bad('Invalid order total', 400);
 
         const userId = await resolveAuthUserId(req);
