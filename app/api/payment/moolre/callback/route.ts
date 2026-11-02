@@ -63,10 +63,14 @@ export async function POST(req: Request) {
         console.log('[Callback] Body keys:', Object.keys(body).join(', '));
         console.log('[Callback] Data keys:', body.data ? Object.keys(body.data).join(', ') : 'no data object');
 
-        // SECURITY: Verify callback secret FIRST (mandatory)
+        // SECURITY: Verify callback secret FIRST (mandatory).
+        // Moolre sends it inside `data`, not at the top level; checking only
+        // body.secret rejected every callback, so WhatsApp orders never got
+        // marked paid unless the customer came back to /order-success.
         const expectedSecret = process.env.MOOLRE_CALLBACK_SECRET;
         if (expectedSecret) {
-            if (!body.secret || body.secret !== expectedSecret) {
+            const receivedSecret = body.data?.secret ?? body.secret;
+            if (!receivedSecret || receivedSecret !== expectedSecret) {
                 console.error('[Callback] Secret mismatch or missing! Rejecting callback.');
                 return NextResponse.json({ success: false, message: 'Invalid callback signature' }, { status: 403 });
             }
