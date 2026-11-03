@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { supabase } from '@/lib/supabase';
 import { escapeHtml } from '@/lib/sanitize';
 import { getShopperBaseUrl } from '@/lib/site-urls';
+import { isPlaceholderEmail } from '@/lib/placeholder-email';
 
 const resend = new Resend(process.env.RESEND_API_KEY || 'missing_api_key');
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@gsgbrands.com.gh';
@@ -92,6 +93,8 @@ export async function sendEmail({ to, subject, html }: { to: string; subject: st
         console.warn('[Email] RESEND_API_KEY not configured');
         return null;
     }
+    // WhatsApp AI orders carry a placeholder address — never mail it.
+    if (isPlaceholderEmail(to)) return null;
     try {
         const data = await resend.emails.send({
             from: EMAIL_FROM,

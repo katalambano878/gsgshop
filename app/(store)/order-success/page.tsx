@@ -4,6 +4,25 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { isPlaceholderEmail } from '@/lib/placeholder-email';
+
+// Signed-in owners can read their order directly; guests (every WhatsApp
+// customer) are blocked by RLS and go through the server route, which
+// only returns delivery details when `reference` matches the payment.
+async function loadOrder(orderNum: string, reference: string | null) {
+  const { data } = await supabase
+    .from('orders')
+    .select('*, order_items (*)')
+    .eq('order_number', orderNum)
+    .maybeSingle();
+  if (data) return data;
+
+  const qs = reference ? `?reference=${encodeURIComponent(reference)}` : '';
+  const res = await fetch(`/api/payment/order/${encodeURIComponent(orderNum)}/receipt${qs}`);
+  if (!res.ok) return null;
+  const json = await res.json();
+  return json.success ? json.order : null;
+}
 
 function OrderSuccessContent() {
   const searchParams = useSearchParams();
@@ -30,16 +49,7 @@ function OrderSuccessContent() {
       }
 
       try {
-        const { data: orderData, error } = await supabase
-          .from('orders')
-          .select(`
-                    *,
-                    order_items (*)
-                `)
-          .eq('order_number', orderNumber)
-          .single();
-
-        if (error) throw error;
+        const orderData = await loadOrder(orderNumber, gatewayReference);
         setOrder(orderData);
 
         if (paymentSuccess === 'true' && orderData && orderData.payment_status !== 'paid') {
@@ -61,11 +71,7 @@ function OrderSuccessContent() {
     // and we can short-circuit by just re-reading the order.
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    const { data: refreshed } = await supabase
-      .from('orders')
-      .select('*, order_items (*)')
-      .eq('order_number', orderNum)
-      .single();
+    const refreshed = await loadOrder(orderNum, gatewayReference);
 
     if (refreshed?.payment_status === 'paid') {
       setOrder(refreshed);
@@ -104,11 +110,7 @@ function OrderSuccessContent() {
       console.log('Payment verification result:', { provider, result });
 
       if (result.success && result.payment_status === 'paid') {
-        const { data: updated } = await supabase
-          .from('orders')
-          .select('*, order_items (*)')
-          .eq('order_number', orderNum)
-          .single();
+        const updated = await loadOrder(orderNum, gatewayReference);
         if (updated) setOrder(updated);
       }
     } catch (err) {
@@ -154,6 +156,7 @@ function OrderSuccessContent() {
   // for Sole Express). When the order isn't paid yet we show the promise
   // relative to "payment confirmation" rather than a misleading date.
   const deliveryEstimate = computeDeliveryEstimate(order);
+  const hasRealEmail = Boolean(order.email) && !isPlaceholderEmail(order.email);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
@@ -307,18 +310,28 @@ function OrderSuccessContent() {
                     </div>
                     <div>
                       <p className="text-sm text-gray-600 mb-1">Address</p>
-                      <p className="text-gray-900">{order.shipping_address.address}</p>
-                      <p className="text-gray-900">{order.shipping_address.city}, {order.shipping_address.region}</p>
-                      <p className="text-gray-900">{order.shipping_address.postalCode}</p>
+                      {order.shipping_address.address && (
+                        <p className="text-gray-900">{order.shipping_address.address}</p>
+                      )}
+                      <p className="text-gray-900">
+                        {[order.shipping_address.city, order.shipping_address.region].filter(Boolean).join(', ')}
+                      </p>
+                      {order.shipping_address.postalCode && (
+                        <p className="text-gray-900">{order.shipping_address.postalCode}</p>
+                      )}
                     </div>
-                    <div>
-                      <p className="text-sm text-gray-600 mb-1">Phone</p>
-                      <p className="text-gray-900">{order.phone}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600 mb-1">Email</p>
-                      <p className="text-gray-900">{order.email}</p>
-                    </div>
+                    {order.phone && (
+                      <div>
+                        <p className="text-sm text-gray-600 mb-1">Phone</p>
+                        <p className="text-gray-900">{order.phone}</p>
+                      </div>
+                    )}
+                    {hasRealEmail && (
+                      <div>
+                        <p className="text-sm text-gray-600 mb-1">Email</p>
+                        <p className="text-gray-900">{order.email}</p>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -327,10 +340,12 @@ function OrderSuccessContent() {
                 <h3 className="font-semibold text-gray-900 mb-3">What's Next?</h3>
                 <div className="space-y-3">
                   <div className="flex items-start space-x-3">
-                    <i className="ri-mail-line text-blue-700 mt-1"></i>
+                    <i className={`${hasRealEmail ? 'ri-mail-line' : 'ri-message-3-line'} text-blue-700 mt-1`}></i>
                     <div>
-                      <p className="text-sm font-semibold text-gray-900">Email Confirmation</p>
-                      <p className="text-sm text-gray-600">Sent to {order.email}</p>
+                      <p className="text-sm font-semibold text-gray-900">Confirmation</p>
+                      <p className="text-sm text-gray-600">
+                        {hasRealEmail ? `Sent to ${order.email}` : 'Sent by SMS and WhatsApp'}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-start space-x-3">
