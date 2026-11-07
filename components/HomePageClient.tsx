@@ -25,8 +25,8 @@ const FALLBACK_HOME_CATEGORY_ROWS = [
   { id: 'fallback-fashion', name: 'Fashion & Clothing', slug: 'fashion-clothing', image_url: null, parent_id: null },
 ];
 const DELIVERY_OPTIONS = [
-  { id: 'pickup', title: 'Pickup', desc: 'Within 72hrs (excluding Sunday) after confirmation.', href: '/shipping#pickup', icon: 'ri-store-2-line' },
-  { id: 'free', title: 'Free Delivery', desc: 'Tue/Fri only. Min 5% discount as Free Delivery Discount.', href: '/shipping#free-delivery', icon: 'ri-truck-line' },
+  { id: 'pickup', title: 'Pickup', desc: 'No delivery fee. Daily after confirmation.', href: '/shipping#pickup', icon: 'ri-store-2-line' },
+  { id: 'free', title: 'Free Delivery', desc: 'Daily. The more you buy, the further you get it FREE.', href: '/shipping#free-delivery', icon: 'ri-truck-line' },
   { id: 'sole', title: 'Sole Express', desc: 'Daily. Fresh/perishable must use Express. 2hr–48hr slots.', href: '/shipping#sole-express', icon: 'ri-time-line' },
   { id: 'joint', title: 'Joint Express', desc: 'Share fee with neighbor. Same perishable rule. 2hr–48hr.', href: '/shipping#joint-express', icon: 'ri-group-line' },
 ];

@@ -11,18 +11,18 @@ export default function ShippingPage() {
     {
       id: 'pickup',
       type: 'Pickup',
-      time: 'Within 72hrs (excl. Sunday)',
+      time: 'Daily after confirmation',
       cost: 'No delivery fee',
-      description: 'Available after order confirmation. Pickup location will be displayed at the confirmation stage. Collect your items at your convenience within the pickup window.',
+      description: 'Pickup location will be displayed at the confirmation stage. Collect your items at your convenience.',
       icon: 'ri-store-2-line',
       highlight: false,
     },
     {
       id: 'free-delivery',
       type: 'Free Delivery',
-      time: 'Tuesday & Friday only',
+      time: 'Daily after confirmation',
       cost: 'Calculated at checkout',
-      description: 'Your delivery total is shown at checkout after you enter your address. Confirm before noon of the preceding delivery day.',
+      description: 'Distance and your order total set the fee: the more you buy, the further you get it FREE. If you live further than your free km, you only pay for the extra distance. Your fee is shown at checkout after you enter your address.',
       icon: 'ri-truck-line',
       highlight: true,
     },
@@ -60,19 +60,19 @@ export default function ShippingPage() {
     {
       zone: 'Zone 1 — Accra Metro',
       areas: 'East Legon, Osu, Labone, Airport Residential, Dzorwulu, Cantonments, Adabraka, Tema',
-      freeDelivery: 'Tue & Fri',
+      freeDelivery: 'Daily',
       express: '2hr–48hr windows',
     },
     {
       zone: 'Zone 2 — Greater Accra',
       areas: 'Madina, Legon, Haatso, Achimota, Dansoman, Spintex, Teshie, Kasoa',
-      freeDelivery: 'Tue & Fri',
+      freeDelivery: 'Daily',
       express: '6hr–48hr windows',
     },
     {
       zone: 'Zone 3 — Major Cities',
       areas: 'Kumasi, Takoradi, Cape Coast, Tamale, Sunyani, Ho, Koforidua. We deliver to a commercial transport station in Accra; transport charges to your town are extra.',
-      freeDelivery: 'Fri only',
+      freeDelivery: 'Daily',
       express: '24hr–48hr windows',
     },
     {
@@ -92,7 +92,7 @@ export default function ShippingPage() {
     <div className="min-h-screen bg-gray-50">
       <PageHero
         title="Shipping & Delivery"
-        subtitle="Pickup, Free Delivery (Tue/Fri), Sole Express, Joint Express, and Add To Personal Shopper — across Ghana."
+        subtitle="Pickup, Free Delivery, Sole Express, Joint Express, and Add To Personal Shopper — across Ghana."
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">

@@ -36,13 +36,13 @@ export const STORE_FAQS = [
     category: 'shipping',
     question: 'What are your delivery times?',
     answer:
-      'It depends on the delivery choice you pick at checkout. Sole Express and Joint Express run daily with 2hr, 6hr, 12hr, 24hr or 48hr slots after order confirmation — fresh and perishable items must use one of these. Free Delivery runs on Tuesdays and Fridays only, and your order must be confirmed before noon the preceding day. Pickup is ready within 72 hours of confirmation (excluding Sundays), and you collect at the location shared in your confirmation. Personal Shopper requests are scheduled separately once we confirm market prices with you.',
+      'It depends on the delivery choice you pick at checkout. Sole Express and Joint Express run daily with 2hr, 6hr, 12hr, 24hr or 48hr slots after order confirmation — fresh and perishable items must use one of these. Free Delivery runs daily after confirmation. Pickup is available daily after confirmation: the pickup location is shown at the confirmation stage, and you collect your items at your convenience. Personal Shopper requests are scheduled separately once we confirm market prices with you.',
   },
   {
     category: 'shipping',
     question: 'How much does shipping cost?',
     answer:
-      'Your delivery total is calculated from your delivery location and shown clearly at checkout before you pay. At checkout, search your area or landmark — we work out the distance for you. Pickup has no delivery fee. Sole Express, Joint Express, and Free Delivery (Tue/Fri) each show their final amount once your location is set.',
+      'Your delivery total is calculated from your delivery location and shown clearly at checkout before you pay. At checkout, search your area or landmark — we work out the distance for you. Pickup has no delivery fee. Sole Express, Joint Express, and Free Delivery each show their final amount once your location is set. With Free Delivery, the more you buy, the further you get it free — if you live further than your free km, you only pay for the extra distance.',
   },
   {
     category: 'shipping',
@@ -78,13 +78,13 @@ export const STORE_FAQS = [
     category: 'returns',
     question: 'Who pays for return shipping?',
     answer:
-      'If you\'re returning due to a defect or our error, we cover return shipping in full. For change-of-mind returns, the customer pays return shipping — the cost depends on the delivery option you choose to send the item back (Sole Express, Joint Express, Free Delivery on Tue/Fri, or pickup at our location).',
+      'If you\'re returning due to a defect or our error, we cover return shipping in full. For change-of-mind returns, the customer pays return shipping — the cost depends on the delivery option you choose to send the item back (Sole Express, Joint Express, Free Delivery, or pickup at our location).',
   },
   {
     category: 'returns',
     question: 'Can I exchange an item instead of returning it?',
     answer:
-      'Yes — select "Exchange" when initiating your return and we\'ll send the replacement as soon as we receive your original item. Exchange shipping is paid by the customer because the swap is driven by your own change of mind (wrong size, colour, etc.). The exact cost depends on which delivery option you pick for the swap (Sole Express, Joint Express, Free Delivery on Tue/Fri, or pickup). If the item was defective or we shipped you the wrong one, exchange shipping is on us.',
+      'Yes — select "Exchange" when initiating your return and we\'ll send the replacement as soon as we receive your original item. Exchange shipping is paid by the customer because the swap is driven by your own change of mind (wrong size, colour, etc.). The exact cost depends on which delivery option you pick for the swap (Sole Express, Joint Express, Free Delivery, or pickup). If the item was defective or we shipped you the wrong one, exchange shipping is on us.',
   },
   {
     category: 'payment',

@@ -86,9 +86,9 @@ export default function CheckoutPage() {
     },
     {
       value: 'free-delivery',
-      label: 'Free Delivery (Tue/Fri)',
+      label: 'Free Delivery (Daily)',
       subtitle: null as string | null,
-      desc: 'Tue/Fri only. Confirm before noon the preceding day. Total shown after your address.',
+      desc: 'Daily after confirmation. The more you buy, the further you get it FREE — beyond your free km you only pay the extra distance. Fee shown after your address.',
     },
     {
       value: 'sole-express',
@@ -104,9 +104,9 @@ export default function CheckoutPage() {
     },
     {
       value: 'pickup',
-      label: 'Pickup (Within 72 Hrs.)',
+      label: 'Pickup (Daily)',
       subtitle: null as string | null,
-      desc: 'No delivery fee. Collect within 72hrs (excl. Sunday) at the hub in your confirmation.',
+      desc: 'No delivery fee. Daily after confirmation. Pickup location is shown at confirmation — collect at your convenience.',
     },
   ];
 

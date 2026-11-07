@@ -244,7 +244,7 @@ export default function AdminDeliveryPricingPage() {
               {numField('Promo discount', 'promoDiscount', 'Standing discount off express fees. 0 = no promo.', { prefix: 'GH₵', step: '0.5' })}
               {numField('Sole Express multiplier', 'soleMultiplier', 'Default 5.', { step: '0.5' })}
               {numField('Joint Express multiplier', 'jointMultiplier', 'Default 7 (fee is split ÷2).', { step: '0.5' })}
-              {numField('Free Delivery multiplier', 'freeMultiplier', 'Default 3 (Tue/Fri).', { step: '0.5' })}
+              {numField('Free Delivery multiplier', 'freeMultiplier', 'Default 3.', { step: '0.5' })}
               {numField('Express purchase share', 'expressPurchasePct', 'Added on Sole/Joint. Default 1.5%.', { suffix: '%', step: '0.1' })}
               {numField('Free Delivery purchase offset', 'freePurchasePct', 'Subtracted on Free Delivery. Default 1%.', { suffix: '%', step: '0.1' })}
             </div>
@@ -371,7 +371,7 @@ export default function AdminDeliveryPricingPage() {
                         ? 'Sole Express (Daily)'
                         : method === 'joint-express'
                           ? 'Joint Express (Daily)'
-                          : 'Free Delivery (Tue/Fri)'}
+                          : 'Free Delivery (Daily)'}
                     </p>
                     <p className="text-sm font-black text-purple-700 tabular-nums">
                       GH₵{breakdown.fee.toFixed(2)}

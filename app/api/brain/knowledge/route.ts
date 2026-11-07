@@ -92,9 +92,9 @@ export async function GET() {
           {
             id: 'free-delivery',
             name: 'Free Delivery',
-            schedule: 'Tuesday and Friday only; confirm before noon the preceding day',
+            schedule: 'Daily after confirmation',
             formula: `${ghs(p.ratePerKm)} × km × ${p.freeMultiplier} − ${pct(p.freePurchasePct)} of purchase (never below GH₵0)`,
-            note: 'Larger orders can bring the fee down to GH₵0. Not for perishables.',
+            note: 'Distance and your order total set the fee: the more you buy, the further you get it FREE. If you live further than your free km, you only pay for the extra distance. Fresh/perishable items still need Sole or Joint Express.',
           },
           {
             id: 'personal-shopper',
@@ -106,9 +106,9 @@ export async function GET() {
           {
             id: 'pickup',
             name: 'Pickup',
-            schedule: 'Ready within 72 hours of confirmation (excluding Sunday)',
+            schedule: 'Daily after confirmation',
             formula: 'GH₵0, no delivery fee',
-            note: 'Collect at the hub shown in the order confirmation.',
+            note: 'The pickup location is shown at the confirmation stage; the customer collects at their convenience.',
           },
         ],
       },

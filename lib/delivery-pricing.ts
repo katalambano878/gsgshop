@@ -12,7 +12,7 @@
  * Joint Express (shared — fee is split in half):
  *   [(rate × km × jointMultiplier) + (expressPct% of purchase)] ÷ 2 − discount
  *
- * Free Delivery (Tue/Fri):
+ * Free Delivery (daily):
  *   (rate × km × freeMultiplier) − (freePct% of purchase)  (floored at GH₵0)
  *
  * Pickup / Personal Shopper handling: GH₵0 on this platform.
@@ -242,15 +242,15 @@ export const DELIVERY_FORMULA_COPY = [
   {
     id: 'free-delivery' as const,
     name: 'Free Delivery',
-    schedule: 'Tuesday & Friday only',
+    schedule: 'Daily after confirmation',
     formula: 'GH₵0.50 × km × 3 − 1% of total purchase',
-    note: 'The 1% purchase offset can bring the fee down to GH₵0 for larger orders. Confirm before noon the preceding delivery day.',
+    note: 'Distance and your order total set the fee: the more you buy, the further you get it FREE. If you live further than your free km, you only pay for the extra distance.',
   },
   {
     id: 'pickup' as const,
     name: 'Pickup',
-    schedule: 'Within 72hrs (excl. Sunday)',
+    schedule: 'Daily after confirmation',
     formula: 'GH₵0 — no delivery fee',
-    note: 'Collect at the hub shown in your order confirmation.',
+    note: 'Pickup location is shown at the confirmation stage. Collect your items at your convenience.',
   },
 ];

@@ -17,7 +17,7 @@ export const dynamic = 'force-dynamic';
 const METHODS = [
   { id: 'sole-express', name: 'Sole Express' },
   { id: 'joint-express', name: 'Joint Express' },
-  { id: 'free-delivery', name: 'Free Delivery (Tue/Fri)' },
+  { id: 'free-delivery', name: 'Free Delivery (daily)' },
   { id: 'pickup', name: 'Pickup' },
 ] as const;
 

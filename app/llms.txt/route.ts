@@ -46,7 +46,7 @@ export async function GET() {
 - Storefront: ${goods}
 - Personal Shopper: ${shopper}
 - Payments: Mobile Money (MTN, Telecel, AirtelTigo) and Visa/Mastercard
-- Delivery: Free Delivery (Tue/Fri), Sole Express, Joint Express, Pickup
+- Delivery: Free Delivery (daily), Sole Express, Joint Express, Pickup (daily)
 
 ## Storefront (${goods})
 - Home: ${goods}
@@ -72,7 +72,7 @@ export async function GET() {
 - Personal Shopper markup: 15% or less on the item subtotal (currently ${shopperMarkupPct}%), no hidden fees.
 - Delivery fee is calculated from road distance and shown at checkout before payment. Pickup is free.
 - Fresh/perishable items must use Sole Express or Joint Express.
-- Free Delivery runs Tuesdays and Fridays; a share of the order total comes off the fee, so larger orders can ship for GH₵0.
+- Free Delivery runs daily after confirmation. Distance and order total set the fee: the more you buy, the further it's free; beyond the free km you only pay the extra distance.
 
 ## Products available in the online store
 ${productLines || `- See the shop: ${goods}/shop`}

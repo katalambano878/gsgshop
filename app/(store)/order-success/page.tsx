@@ -420,8 +420,8 @@ export default function OrderSuccessPage() {
  * Anchors on the payment-confirmed timestamp (`metadata.payment_verified_at`),
  * not the order-creation timestamp — the customer's expectation is "from when
  * I paid to when it arrives", which is what each delivery option actually
- * promises ("within 48hrs of confirmation" for Express, "ready within 72hrs"
- * for Pickup, "next Tue/Fri" for Free Delivery).
+ * promises ("within 48hrs of confirmation" for Express). Pickup and Free
+ * Delivery run daily after confirmation.
  *
  * When the order isn't paid yet, we phrase the promise relative to "payment
  * confirmation" instead of inventing a date.
@@ -462,40 +462,21 @@ function computeDeliveryEstimate(order: any): {
     };
   }
 
-  // Pickup — ready within 72hrs of confirmation, excluding Sunday.
+  // Pickup — daily after confirmation; the location is in the confirmation.
   if (method === 'pickup') {
-    if (anchor) {
-      const eta = new Date(anchor.getTime() + 72 * 60 * 60 * 1000);
-      if (eta.getDay() === 0) eta.setDate(eta.getDate() + 1); // skip Sunday
-      const days = dayCount(anchor, eta);
-      return {
-        heading: 'Ready for Pickup By',
-        dateLabel: fmtDate(eta),
-        subLabel: `Within 72 hours of payment · ${days} day${days === 1 ? '' : 's'} after payment confirmation`,
-      };
-    }
     return {
-      heading: 'Ready for Pickup',
-      dateLabel: 'Within 72 hours of payment',
-      subLabel: 'Pickup at our location (excluding Sundays)',
+      heading: 'Pickup',
+      dateLabel: 'Daily after confirmation',
+      subLabel: 'Pickup location is shown in your confirmation. Collect at your convenience.',
     };
   }
 
-  // Free Delivery — Tue/Fri only, must be confirmed before noon prior day.
+  // Free Delivery — daily after confirmation.
   if (method === 'free-delivery') {
-    if (anchor) {
-      const candidate = nextFreeDeliverySlot(anchor);
-      const days = dayCount(anchor, candidate);
-      return {
-        heading: 'Estimated Delivery',
-        dateLabel: fmtDate(candidate),
-        subLabel: `Free Delivery (Tue/Fri) · ${days} day${days === 1 ? '' : 's'} after payment confirmation`,
-      };
-    }
     return {
-      heading: 'Estimated Delivery',
-      dateLabel: 'Next Tuesday or Friday',
-      subLabel: 'Free Delivery requires confirmation before noon the preceding day',
+      heading: 'Delivery',
+      dateLabel: 'Daily after confirmation',
+      subLabel: 'Free Delivery: the more you buy, the further it is free',
     };
   }
 
@@ -513,27 +494,4 @@ function computeDeliveryEstimate(order: any): {
     dateLabel: 'Confirmed after payment',
     subLabel: 'Window depends on the delivery option you picked',
   };
-}
-
-/**
- * Returns the next Tue/Fri after `anchor` that satisfies the
- * "confirmed before noon the preceding day" rule.
- */
-function nextFreeDeliverySlot(anchor: Date): Date {
-  const candidates: Date[] = [];
-  for (let i = 1; i <= 8; i++) {
-    const c = new Date(anchor);
-    c.setDate(c.getDate() + i);
-    c.setHours(12, 0, 0, 0);
-    const d = c.getDay();
-    if (d === 2 || d === 5) candidates.push(c); // Tue or Fri
-  }
-  for (const c of candidates) {
-    const cutoff = new Date(c);
-    cutoff.setDate(cutoff.getDate() - 1);
-    cutoff.setHours(12, 0, 0, 0);
-    if (anchor.getTime() <= cutoff.getTime()) return c;
-  }
-  // Fall back to the last candidate if nothing else qualifies.
-  return candidates[candidates.length - 1] ?? new Date(anchor.getTime() + 7 * 24 * 60 * 60 * 1000);
 }
