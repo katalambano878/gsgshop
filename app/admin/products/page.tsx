@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { notifyMetaCatalog } from '@/lib/meta-admin-client';
 
 export default function ProductsPage() {
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -110,8 +111,10 @@ export default function ProductsPage() {
 
   const handleDeleteProduct = async (productId: string) => {
     if (confirm('Are you sure you want to delete this product?')) {
+      const sku = products.find(p => p.id === productId)?.sku;
       const { error } = await supabase.from('products').delete().eq('id', productId);
       if (!error) {
+        if (sku) void notifyMetaCatalog({ action: 'remove', skus: [sku] });
         setProducts(products.filter(p => p.id !== productId));
         alert('Product deleted successfully');
       } else {
@@ -122,8 +125,10 @@ export default function ProductsPage() {
 
   const handleBulkDelete = async () => {
     if (confirm(`Are you sure you want to delete ${selectedProducts.length} products?`)) {
+      const skus = products.filter(p => selectedProducts.includes(p.id)).map(p => p.sku).filter(Boolean);
       const { error } = await supabase.from('products').delete().in('id', selectedProducts);
       if (!error) {
+        if (skus.length) void notifyMetaCatalog({ action: 'remove', skus });
         setProducts(products.filter(p => !selectedProducts.includes(p.id)));
         setSelectedProducts([]);
         alert('Products deleted successfully');

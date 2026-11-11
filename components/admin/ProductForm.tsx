@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { notifyMetaCatalog } from '@/lib/meta-admin-client';
 import { useRouter } from 'next/navigation';
 
 interface ProductFormProps {
@@ -372,6 +373,9 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
                     if (varError) throw varError;
                 }
             }
+
+            // Send the new price / stock / photos to the Facebook, Instagram and WhatsApp catalogue.
+            if (productId) await notifyMetaCatalog({ action: 'product', productIds: [productId] });
 
             alert(isEditMode ? 'Product updated successfully!' : 'Product created successfully!');
             router.push('/admin/products');

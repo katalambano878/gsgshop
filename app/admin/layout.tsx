@@ -207,6 +207,11 @@ export default function AdminLayout({
       path: '/admin/delivery'
     },
     {
+      title: 'Meta & WhatsApp',
+      icon: 'ri-facebook-circle-line',
+      path: '/admin/meta'
+    },
+    {
       title: 'Customer Insights',
       icon: 'ri-user-search-line',
       path: '/admin/customer-insights',

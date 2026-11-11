@@ -9,7 +9,8 @@
  * so Meta can match events to catalogue items for dynamic ads.
  */
 
-export const META_PIXEL_ID = process.env.NEXT_PUBLIC_META_PIXEL_ID || '1864260301673937';
+/** Fallback only — the live Pixel ID is set in Admin → Meta & WhatsApp. */
+export const META_PIXEL_ID = '1864260301673937';
 
 type FbqParams = Record<string, unknown>;
 
@@ -23,9 +24,9 @@ export function trackPixel(event: string, params?: FbqParams, eventId?: string, 
     if (typeof window === 'undefined') return;
     if (window.location.pathname.startsWith('/admin')) return;
     if (typeof window.fbq !== 'function') {
-        // The base code loads afterInteractive; events fired on first render
-        // (ViewContent, Purchase) can beat it. Retry for ~5s, then give up.
-        if (attempt < 20) setTimeout(() => trackPixel(event, params, eventId, attempt + 1), 250);
+        // The base code loads after /api/meta/config answers; events fired on
+        // first render (ViewContent, Purchase) can beat it. Retry for ~10s.
+        if (attempt < 40) setTimeout(() => trackPixel(event, params, eventId, attempt + 1), 250);
         return;
     }
     try {
