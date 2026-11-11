@@ -10,6 +10,7 @@ import ProductReviews from '@/components/ProductReviews';
 import { notFound } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
 import { usePageTitle } from '@/hooks/usePageTitle';
+import { trackPixel } from '@/lib/meta-pixel';
 
 // Map common color names to hex values for the swatch preview
 function colorNameToHex(name: string): string {
@@ -88,6 +89,20 @@ export default function ProductDetailClient({ slug, initialProduct }: { slug: st
   const [relatedProducts, setRelatedProducts] = useState<any[]>([]);
 
   const { addToCart } = useCart();
+
+  // Meta Pixel: content_ids is the SKU, same as the id in /feed/meta.csv.
+  useEffect(() => {
+    if (!product?.id) return;
+    trackPixel('ViewContent', {
+      content_ids: [product.sku || product.id],
+      content_type: 'product',
+      content_name: product.name,
+      content_category: product.category,
+      value: Number(product.price) || 0,
+      currency: 'GHS',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id]);
 
   useEffect(() => {
     async function fetchProduct() {
@@ -223,6 +238,7 @@ export default function ProductDetailClient({ slug, initialProduct }: { slug: st
 
     addToCart({
       id: product.id,
+      sku: product.sku || undefined,
       name: product.name,
       price: activePrice,
       image: product.images[0],

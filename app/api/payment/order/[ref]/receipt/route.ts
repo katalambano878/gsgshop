@@ -31,7 +31,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ ref: str
 
     const { data, error } = await supabaseAdmin
         .from('orders')
-        .select('id, order_number, created_at, subtotal, shipping_total, total, payment_status, payment_method, shipping_method, shipping_address, phone, email, metadata, order_items (id, product_name, variant_name, quantity, unit_price, metadata)')
+        .select('id, order_number, created_at, subtotal, shipping_total, total, payment_status, payment_method, shipping_method, shipping_address, phone, email, metadata, order_items (id, product_id, product_name, variant_name, sku, quantity, unit_price, metadata, products (sku))')
         .eq('order_number', key)
         .maybeSingle();
 
@@ -61,6 +61,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ ref: str
             },
             order_items: (data.order_items ?? []).map((i: any) => ({
                 id: i.id,
+                sku: i.sku || i.products?.sku || null,
                 product_name: i.product_name,
                 variant_name: i.variant_name,
                 quantity: i.quantity,

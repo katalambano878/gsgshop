@@ -20,6 +20,7 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
     const [price, setPrice] = useState(initialData?.price || '');
     const [comparePrice, setComparePrice] = useState(initialData?.compare_at_price || '');
     const [sku, setSku] = useState(initialData?.sku || '');
+    const [brand, setBrand] = useState(initialData?.brand || '');
     const [stock, setStock] = useState(initialData?.quantity || '');
     const [moq, setMoq] = useState(initialData?.moq || '1');
     const [lowStockThreshold, setLowStockThreshold] = useState(initialData?.metadata?.low_stock_threshold || '5');
@@ -287,6 +288,7 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
                 price: parseFloat(price) || 0,
                 compare_at_price: comparePrice ? parseFloat(comparePrice) : null,
                 sku: sku || generateSku(), // Auto-generate if empty
+                brand: brand.trim() || null,
                 quantity: hasVariants ? variantStockTotal : (parseInt(stock) || 0),
                 moq: parseInt(moq) || 1,
                 status: status.toLowerCase(),
@@ -604,6 +606,20 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
                                 <div className="grid md:grid-cols-2 gap-6">
                                     <div>
                                         <label className="block text-sm font-semibold text-gray-900 mb-2">
+                                            Brand (manufacturer)
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={brand}
+                                            onChange={(e) => setBrand(e.target.value)}
+                                            className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="e.g. Nestlé, Don Simon, McBerry"
+                                        />
+                                        <p className="text-sm text-gray-500 mt-1">Shown in the Facebook, Instagram and WhatsApp catalogues.</p>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-900 mb-2">
                                             SKU (Auto-generated)
                                         </label>
                                         <div className="flex gap-2">
@@ -615,16 +631,23 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
                                                 placeholder="Auto-generated"
                                                 readOnly
                                             />
-                                            <button
-                                                type="button"
-                                                onClick={() => setSku(generateSku())}
-                                                className="px-4 py-3 border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors cursor-pointer"
-                                                title="Generate new SKU"
-                                            >
-                                                <i className="ri-refresh-line text-lg"></i>
-                                            </button>
+                                            {/* An existing product's SKU is its Meta/Google catalogue id — it must never change. */}
+                                            {!isEditMode && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSku(generateSku())}
+                                                    className="px-4 py-3 border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors cursor-pointer"
+                                                    title="Generate new SKU"
+                                                >
+                                                    <i className="ri-refresh-line text-lg"></i>
+                                                </button>
+                                            )}
                                         </div>
-                                        <p className="text-sm text-gray-500 mt-1">SKU is auto-generated. Click refresh to generate a new one.</p>
+                                        <p className="text-sm text-gray-500 mt-1">
+                                            {isEditMode
+                                                ? 'SKU is locked: Facebook, Instagram, WhatsApp and Google use it to identify this product.'
+                                                : 'SKU is auto-generated. Click refresh to generate a new one.'}
+                                        </p>
                                     </div>
 
                                     <div>

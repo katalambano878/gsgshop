@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
+import MetaPixel from "@/components/MetaPixel";
 import { CartProvider } from "@/context/CartContext";
 import { WishlistProvider } from "@/context/WishlistContext";
 import {
@@ -157,6 +158,7 @@ export default function RootLayout({
         >
           Skip to main content
         </a>
+        <MetaPixel />
         <CartProvider>
           <WishlistProvider>
             <div id="main-content">

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
+import { trackPixelOnce } from '@/lib/meta-pixel';
 
 type RequestSummary = {
   id: string;
@@ -86,6 +87,22 @@ function ShopperPaymentCompleteContent() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref]);
+
+  // Meta Pixel Purchase for a paid Personal Shopper request, once per request.
+  useEffect(() => {
+    if (!request?.request_number || request.payment_status !== 'paid') return;
+    trackPixelOnce(
+      request.request_number,
+      'Purchase',
+      {
+        value: Number(request.total_final) || 0,
+        currency: 'GHS',
+        content_name: 'Personal Shopper request',
+        content_category: 'personal_shopper',
+      },
+      request.request_number
+    );
+  }, [request?.request_number, request?.payment_status, request?.total_final]);
 
   async function verifyPayment(requestNumber: string) {
     setVerifying(true);

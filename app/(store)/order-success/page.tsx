@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { isPlaceholderEmail } from '@/lib/placeholder-email';
+import { trackPixelOnce } from '@/lib/meta-pixel';
 
 // Signed-in owners can read their order directly; guests (every WhatsApp
 // customer) are blocked by RLS and go through the server route, which
@@ -12,7 +13,7 @@ import { isPlaceholderEmail } from '@/lib/placeholder-email';
 async function loadOrder(orderNum: string, reference: string | null) {
   const { data } = await supabase
     .from('orders')
-    .select('*, order_items (*)')
+    .select('*, order_items (*, products (sku))')
     .eq('order_number', orderNum)
     .maybeSingle();
   if (data) return data;
@@ -63,6 +64,31 @@ function OrderSuccessContent() {
     }
     fetchOrder();
   }, [orderNumber]);
+
+  // Meta Pixel Purchase — only once the payment is confirmed, once per order.
+  // content_ids are SKUs, matching /feed/meta.csv.
+  useEffect(() => {
+    if (!order?.order_number || order.payment_status !== 'paid') return;
+    const items: any[] = order.order_items || [];
+    const contents = items.map((i) => ({
+      id: i.sku || i.products?.sku || i.product_id || i.product_name,
+      quantity: i.quantity,
+      item_price: Number(i.unit_price) || 0,
+    }));
+    trackPixelOnce(
+      order.order_number,
+      'Purchase',
+      {
+        value: Number(order.total) || 0,
+        currency: 'GHS',
+        content_type: 'product',
+        content_ids: contents.map((c) => c.id),
+        contents,
+        num_items: contents.reduce((n, c) => n + (c.quantity || 0), 0),
+      },
+      order.order_number
+    );
+  }, [order?.order_number, order?.payment_status]);
 
   const verifyPayment = async (orderNum: string, initialOrder: any) => {
     setVerifying(true);
