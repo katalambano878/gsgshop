@@ -12,6 +12,8 @@ type Settings = {
   autoSync: boolean;
   tokenSet: boolean;
   tokenLast4: string;
+  whatsappTokenSet: boolean;
+  whatsappTokenLast4: string;
   lastSync: { at: string; ok: boolean; sent: number; removed?: number; message?: string } | null;
   updatedAt: string | null;
 };
@@ -25,6 +27,7 @@ type FormState = {
   phoneNumberId: string;
   autoSync: boolean;
   accessToken: string;
+  whatsappToken: string;
 };
 
 const toForm = (s: Settings): FormState => ({
@@ -34,6 +37,7 @@ const toForm = (s: Settings): FormState => ({
   phoneNumberId: s.phoneNumberId,
   autoSync: s.autoSync,
   accessToken: '',
+  whatsappToken: '',
 });
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -80,7 +84,7 @@ export default function AdminMetaPage() {
   const set = (field: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => (f ? { ...f, [field]: field === 'autoSync' ? e.target.checked : e.target.value } : f));
 
-  const save = async (extra?: { accessToken?: null }) => {
+  const save = async (extra?: { accessToken?: null; whatsappToken?: null }) => {
     if (!form) return;
     setSaving(true);
     setMessage(null);
@@ -95,6 +99,7 @@ export default function AdminMetaPage() {
           phoneNumberId: form.phoneNumberId,
           autoSync: form.autoSync,
           ...(form.accessToken.trim() ? { accessToken: form.accessToken.trim() } : {}),
+          ...(form.whatsappToken.trim() ? { whatsappToken: form.whatsappToken.trim() } : {}),
           ...extra,
         }),
       });
@@ -102,7 +107,15 @@ export default function AdminMetaPage() {
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save');
       apply(data);
       setChecks(null);
-      setMessage({ type: 'success', text: extra?.accessToken === null ? 'Access token removed.' : 'Saved.' });
+      setMessage({
+        type: 'success',
+        text:
+          extra?.accessToken === null
+            ? 'Catalogue token removed.'
+            : extra?.whatsappToken === null
+              ? 'WhatsApp token removed.'
+              : 'Saved.',
+      });
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to save settings.' });
     } finally {
@@ -188,6 +201,38 @@ export default function AdminMetaPage() {
     </div>
   );
 
+  const tokenField = (
+    key: 'accessToken' | 'whatsappToken',
+    label: string,
+    isSet: boolean,
+    last4: string,
+    hint: React.ReactNode
+  ) => (
+    <div className="mt-4">
+      <label htmlFor={`meta-${key}`} className="block text-sm font-bold text-gray-700 mb-1">{label}</label>
+      <input
+        id={`meta-${key}`}
+        type="password"
+        autoComplete="new-password"
+        value={form[key]}
+        onChange={set(key)}
+        placeholder={isSet ? `Saved (ends in …${last4}). Paste a new one to replace it.` : 'Paste the System User access token'}
+        className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none font-mono text-sm"
+      />
+      <p className="text-xs text-gray-500 mt-1">{hint}</p>
+      {isSet && (
+        <button
+          type="button"
+          onClick={() => save({ [key]: null })}
+          disabled={saving}
+          className="mt-2 text-xs font-semibold text-red-600 hover:underline disabled:opacity-50"
+        >
+          Remove saved token
+        </button>
+      )}
+    </div>
+  );
+
   const button = (action: 'test' | 'setup' | 'sync' | 'whatsapp', label: string, icon: string, disabled = false) => (
     <button
       type="button"
@@ -201,7 +246,8 @@ export default function AdminMetaPage() {
   );
 
   const canSync = settings.tokenSet && Boolean(settings.catalogId);
-  const canWhatsApp = canSync && Boolean(settings.wabaId) && Boolean(settings.phoneNumberId);
+  const canWhatsApp =
+    settings.whatsappTokenSet && Boolean(settings.catalogId) && Boolean(settings.wabaId) && Boolean(settings.phoneNumberId);
 
   return (
     <div className="p-6 md:p-8 max-w-5xl mx-auto">
@@ -240,33 +286,24 @@ export default function AdminMetaPage() {
               {field('WhatsApp phone number ID', 'phoneNumberId', 'WhatsApp Manager → Phone numbers → 0579 033 792 → ID.')}
             </div>
 
-            <div className="mt-4">
-              <label htmlFor="meta-token" className="block text-sm font-bold text-gray-700 mb-1">Access token</label>
-              <input
-                id="meta-token"
-                type="password"
-                autoComplete="new-password"
-                value={form.accessToken}
-                onChange={set('accessToken')}
-                placeholder={settings.tokenSet ? `Saved (ends in …${settings.tokenLast4}). Paste a new one to replace it.` : 'Paste a System User access token'}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none font-mono text-sm"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Business Settings → Users → System users → Generate token, with <span className="font-mono">catalog_management</span>,{' '}
-                <span className="font-mono">business_management</span> and <span className="font-mono">whatsapp_business_management</span>.
-                Stored encrypted; it is never shown again.
-              </p>
-              {settings.tokenSet && (
-                <button
-                  type="button"
-                  onClick={() => save({ accessToken: null })}
-                  disabled={saving}
-                  className="mt-2 text-xs font-semibold text-red-600 hover:underline disabled:opacity-50"
-                >
-                  Remove saved token
-                </button>
-              )}
-            </div>
+            <p className="mt-5 text-xs text-gray-500">
+              Meta gives a separate System User token for the catalogue and for WhatsApp — paste each in its own box.
+              Business Settings → Users → System users → Generate token. Tokens are stored encrypted and never shown again.
+            </p>
+            {tokenField(
+              'accessToken',
+              'Catalogue access token',
+              settings.tokenSet,
+              settings.tokenLast4,
+              <>Used for the Pixel, catalogue and product feed. Needs <span className="font-mono">catalog_management</span> and <span className="font-mono">business_management</span>.</>
+            )}
+            {tokenField(
+              'whatsappToken',
+              'WhatsApp access token',
+              settings.whatsappTokenSet,
+              settings.whatsappTokenLast4,
+              <>Used to show the catalogue on 0579 033 792. Needs <span className="font-mono">whatsapp_business_management</span>; that system user also needs access to the catalogue.</>
+            )}
 
             <label className="mt-5 flex items-start gap-3 cursor-pointer">
               <input type="checkbox" checked={form.autoSync} onChange={set('autoSync')} className="mt-1 h-4 w-4 accent-purple-600" />
@@ -318,12 +355,15 @@ export default function AdminMetaPage() {
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
             <h2 className="text-lg font-bold text-gray-900 mb-4">Connect</h2>
             <div className="grid gap-3">
-              {button('test', 'Test connection', 'ri-shield-check-line', !settings.tokenSet)}
+              {button('test', 'Test connection', 'ri-shield-check-line', !settings.tokenSet && !settings.whatsappTokenSet)}
               {button('setup', settings.feedId ? 'Sync all products now' : 'Set up catalogue (hourly feed + sync)', 'ri-refresh-line', !canSync)}
               {button('whatsapp', 'Show catalogue on WhatsApp', 'ri-whatsapp-line', !canWhatsApp)}
             </div>
-            {!settings.tokenSet && (
-              <p className="text-xs text-gray-500 mt-3">Save an access token to enable these.</p>
+            {(!settings.tokenSet || !settings.whatsappTokenSet) && (
+              <p className="text-xs text-gray-500 mt-3">
+                {!settings.tokenSet && 'Save the Catalogue token to set up the catalogue. '}
+                {!settings.whatsappTokenSet && 'Save the WhatsApp token to show it on WhatsApp.'}
+              </p>
             )}
 
             {checks && (

@@ -7,10 +7,13 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
  * a client component.
  *
  * Stored in site_settings under META_SETTINGS_KEY. site_settings is publicly
- * readable (RLS), so the access token is AES-256-GCM encrypted with a key
+ * readable (RLS), so the access tokens are AES-256-GCM encrypted with a key
  * derived from SUPABASE_SERVICE_ROLE_KEY, which only the server has. The
- * plaintext token never leaves the server; the admin page only sees the last
+ * plaintext tokens never leave the server; the admin page only sees the last
  * four characters.
+ *
+ * Meta issues separate tokens for the catalogue (Pixel, catalogue, feeds) and
+ * for WhatsApp (WhatsApp Business account, phone number), so there are two.
  */
 
 export const META_SETTINGS_KEY = 'meta_integration';
@@ -32,8 +35,11 @@ type StoredMetaSettings = {
     wabaId?: string;
     phoneNumberId?: string;
     autoSync?: boolean;
+    /** Catalogue token. Named accessToken* from when there was only one. */
     accessTokenEnc?: string;
     tokenLast4?: string;
+    whatsappTokenEnc?: string;
+    whatsappTokenLast4?: string;
     lastSync?: MetaSyncResult;
     updatedAt?: string;
 };
@@ -45,14 +51,21 @@ export type MetaSettings = {
     wabaId: string;
     phoneNumberId: string;
     autoSync: boolean;
+    /** Catalogue token: Pixel, catalogue, product feeds. */
     accessToken: string;
     tokenLast4: string;
+    /** WhatsApp token: WhatsApp Business account and phone number. */
+    whatsappToken: string;
+    whatsappTokenLast4: string;
     lastSync: MetaSyncResult | null;
     updatedAt: string | null;
 };
 
-/** What the admin page may see: everything except the token itself. */
-export type MetaSettingsView = Omit<MetaSettings, 'accessToken'> & { tokenSet: boolean };
+/** What the admin page may see: everything except the tokens themselves. */
+export type MetaSettingsView = Omit<MetaSettings, 'accessToken' | 'whatsappToken'> & {
+    tokenSet: boolean;
+    whatsappTokenSet: boolean;
+};
 
 const digits = (v: unknown) => String(v ?? '').replace(/\D/g, '');
 
@@ -118,6 +131,8 @@ export async function getMetaSettings(): Promise<MetaSettings> {
         autoSync: s.autoSync !== false,
         accessToken: decrypt(s.accessTokenEnc),
         tokenLast4: s.tokenLast4 || '',
+        whatsappToken: decrypt(s.whatsappTokenEnc),
+        whatsappTokenLast4: s.whatsappTokenLast4 || '',
         lastSync: s.lastSync ?? null,
         updatedAt: s.updatedAt ?? null,
     };
@@ -126,13 +141,14 @@ export async function getMetaSettings(): Promise<MetaSettings> {
 }
 
 export function toView(s: MetaSettings): MetaSettingsView {
-    const { accessToken, ...rest } = s;
-    return { ...rest, tokenSet: Boolean(accessToken) };
+    const { accessToken, whatsappToken, ...rest } = s;
+    return { ...rest, tokenSet: Boolean(accessToken), whatsappTokenSet: Boolean(whatsappToken) };
 }
 
 /**
- * Save the admin form. `accessToken`: a non-empty string replaces the saved
- * token, `null` removes it, undefined/empty keeps the current one.
+ * Save the admin form. For `accessToken` (catalogue) and `whatsappToken`: a
+ * non-empty string replaces the saved token, `null` removes it,
+ * undefined/empty keeps the current one.
  */
 export async function saveMetaSettings(input: {
     pixelId?: string;
@@ -142,6 +158,7 @@ export async function saveMetaSettings(input: {
     phoneNumberId?: string;
     autoSync?: boolean;
     accessToken?: string | null;
+    whatsappToken?: string | null;
 }): Promise<MetaSettings> {
     const current = await readStored();
     const next: StoredMetaSettings = {
@@ -162,6 +179,14 @@ export async function saveMetaSettings(input: {
         next.accessTokenEnc = encrypt(token);
         next.tokenLast4 = token.slice(-4);
     }
+    if (input.whatsappToken === null) {
+        delete next.whatsappTokenEnc;
+        delete next.whatsappTokenLast4;
+    } else if (typeof input.whatsappToken === 'string' && input.whatsappToken.trim()) {
+        const token = input.whatsappToken.trim();
+        next.whatsappTokenEnc = encrypt(token);
+        next.whatsappTokenLast4 = token.slice(-4);
+    }
     await writeStored(next);
     return getMetaSettings();
 }
@@ -177,13 +202,28 @@ export async function recordMetaFeedId(feedId: string): Promise<void> {
     await writeStored({ ...current, feedId: digits(feedId) });
 }
 
-/** Call the Graph API with the saved token. Throws with Meta's own message on failure. */
+/**
+ * Call the Graph API with a saved token: the catalogue token by default,
+ * `use: 'whatsapp'` for WhatsApp Business account / phone number calls.
+ * Throws with Meta's own message on failure.
+ */
 export async function metaGraph<T = any>(
     path: string,
-    init: { method?: 'GET' | 'POST' | 'DELETE'; body?: Record<string, unknown>; token?: string } = {}
+    init: {
+        method?: 'GET' | 'POST' | 'DELETE';
+        body?: Record<string, unknown>;
+        token?: string;
+        use?: 'catalog' | 'whatsapp';
+    } = {}
 ): Promise<T> {
-    const token = init.token ?? (await getMetaSettings()).accessToken;
-    if (!token) throw new Error('No Meta access token saved yet.');
+    let token = init.token;
+    if (!token) {
+        const s = await getMetaSettings();
+        token = init.use === 'whatsapp' ? s.whatsappToken : s.accessToken;
+    }
+    if (!token) {
+        throw new Error(init.use === 'whatsapp' ? 'No WhatsApp access token saved yet.' : 'No Catalogue access token saved yet.');
+    }
     const method = init.method ?? 'GET';
     const url = new URL(`${META_GRAPH}/${path.replace(/^\//, '')}`);
     let body: string | undefined;

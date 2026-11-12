@@ -7,8 +7,8 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/admin/meta — admin: Meta & WhatsApp settings (never the token).
- * PUT /api/admin/meta — admin: save them. accessToken: string replaces it,
- *     null removes it, omitted keeps it.
+ * PUT /api/admin/meta — admin: save them. accessToken (catalogue) and
+ *     whatsappToken: a string replaces it, null removes it, omitted keeps it.
  */
 
 async function unauthorized(request: Request) {
@@ -40,6 +40,7 @@ export async function PUT(request: Request) {
             phoneNumberId: body.phoneNumberId,
             autoSync: body.autoSync,
             accessToken: body.accessToken === null ? null : typeof body.accessToken === 'string' ? body.accessToken : undefined,
+            whatsappToken: body.whatsappToken === null ? null : typeof body.whatsappToken === 'string' ? body.whatsappToken : undefined,
             // A different catalogue needs its own hourly feed.
             ...(body.catalogId !== undefined && newCatalog !== current.catalogId ? { feedId: '' } : {}),
         });

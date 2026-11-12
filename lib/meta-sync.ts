@@ -149,22 +149,35 @@ export async function connectWhatsAppCatalog(): Promise<{ number: string | null 
     if (!s.catalogId || !s.wabaId || !s.phoneNumberId) {
         throw new Error('Save the catalogue ID, WhatsApp Business Account ID and phone number ID first.');
     }
-    await metaGraph(`${s.wabaId}/product_catalogs`, { method: 'POST', body: { catalog_id: s.catalogId } });
+    if (!s.whatsappToken) throw new Error('Save the WhatsApp access token first.');
+    // WhatsApp-side calls use the WhatsApp token; that system user also needs
+    // access to the catalogue in Business Settings for the link to succeed.
+    await metaGraph(`${s.wabaId}/product_catalogs`, {
+        method: 'POST',
+        body: { catalog_id: s.catalogId },
+        use: 'whatsapp',
+    });
     await metaGraph(`${s.phoneNumberId}/whatsapp_commerce_settings`, {
         method: 'POST',
         body: { is_catalog_visible: true, is_cart_enabled: true },
+        use: 'whatsapp',
     });
-    const phone: any = await metaGraph(s.phoneNumberId, { body: { fields: 'display_phone_number' } }).catch(() => null);
+    const phone: any = await metaGraph(s.phoneNumberId, {
+        body: { fields: 'display_phone_number' },
+        use: 'whatsapp',
+    }).catch(() => null);
     return { number: phone?.display_phone_number ?? null };
 }
 
-/** Check each saved ID against Meta with the saved token. */
+/** Check each saved ID against Meta with the token that goes with it. */
 export async function testMetaConnection() {
     const s = await getMetaSettings();
-    const check = async (label: string, id: string, fields: string) => {
+    const check = async (label: string, id: string, fields: string, use: 'catalog' | 'whatsapp') => {
         if (!id) return { label, ok: false, detail: 'Not filled in' };
+        const token = use === 'whatsapp' ? s.whatsappToken : s.accessToken;
+        if (!token) return { label, ok: false, detail: `${use === 'whatsapp' ? 'WhatsApp' : 'Catalogue'} access token not saved` };
         try {
-            const res: any = await metaGraph(id, { body: { fields } });
+            const res: any = await metaGraph(id, { body: { fields }, use });
             const name = res?.name || res?.verified_name || res?.display_phone_number || id;
             const extra = res?.product_count !== undefined ? ` (${res.product_count} products)` : '';
             return { label, ok: true, detail: `${name}${extra}` };
@@ -172,13 +185,10 @@ export async function testMetaConnection() {
             return { label, ok: false, detail: err?.message || 'Not reachable' };
         }
     };
-    if (!s.accessToken) {
-        return [{ label: 'Access token', ok: false, detail: 'Not saved yet' }];
-    }
     return Promise.all([
-        check('Pixel', s.pixelId, 'name'),
-        check('Catalogue', s.catalogId, 'name,product_count'),
-        check('WhatsApp Business Account', s.wabaId, 'name'),
-        check('WhatsApp number', s.phoneNumberId, 'display_phone_number,verified_name'),
+        check('Pixel', s.pixelId, 'name', 'catalog'),
+        check('Catalogue', s.catalogId, 'name,product_count', 'catalog'),
+        check('WhatsApp Business Account', s.wabaId, 'name', 'whatsapp'),
+        check('WhatsApp number', s.phoneNumberId, 'display_phone_number,verified_name', 'whatsapp'),
     ]);
 }
