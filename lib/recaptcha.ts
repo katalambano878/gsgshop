@@ -40,53 +40,60 @@ export async function executeRecaptcha(action: string): Promise<string | null> {
     }
 }
 
+export type RecaptchaResult = {
+    /** May the caller go ahead? True when verified, or when no secret is configured. */
+    success: boolean;
+    /** True only when Google actually verified the token. */
+    verified: boolean;
+    /** True when verification was skipped because RECAPTCHA_SECRET_KEY is unset. */
+    skipped?: boolean;
+    score?: number;
+    error?: string;
+};
+
+let warnedNoSecret = false;
+
 /**
  * Server-side: Verify a reCAPTCHA token with Google.
- * Returns { success, score, action } or { success: false, error }.
+ *
+ * With no RECAPTCHA_SECRET_KEY (the shop has none today) nothing can be
+ * verified: this logs once and returns { success: true, verified: false,
+ * skipped: true }. Callers must never describe that as verified.
  */
-export async function verifyRecaptcha(
-    token: string,
-    expectedAction?: string
-): Promise<{ success: boolean; score?: number; error?: string }> {
+export async function verifyRecaptcha(token: string, expectedAction?: string): Promise<RecaptchaResult> {
     if (!RECAPTCHA_SECRET_KEY) {
-        console.warn('[reCAPTCHA] RECAPTCHA_SECRET_KEY not configured — skipping verification');
-        return { success: true, score: 1.0 }; // Pass through if not configured
+        if (!warnedNoSecret) {
+            console.warn('[reCAPTCHA] RECAPTCHA_SECRET_KEY is not set: tokens are not verified');
+            warnedNoSecret = true;
+        }
+        return { success: true, verified: false, skipped: true };
     }
 
-    if (!token) {
-        return { success: false, error: 'No reCAPTCHA token provided' };
+    if (!token || typeof token !== 'string' || token.length > 4000) {
+        return { success: false, verified: false, error: 'No reCAPTCHA token provided' };
     }
 
     try {
         const response = await fetch('https://www.google.com/recaptcha/api/siteverify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                secret: RECAPTCHA_SECRET_KEY,
-                response: token,
-            }),
+            body: new URLSearchParams({ secret: RECAPTCHA_SECRET_KEY, response: token }),
+            signal: AbortSignal.timeout(8000),
         });
-
         const data = await response.json();
 
         if (!data.success) {
-            return { success: false, error: 'reCAPTCHA verification failed', score: data.score };
+            return { success: false, verified: false, error: 'reCAPTCHA verification failed', score: data.score };
         }
-
-        // Check action matches if specified
         if (expectedAction && data.action !== expectedAction) {
-            return { success: false, error: 'reCAPTCHA action mismatch', score: data.score };
+            return { success: false, verified: false, error: 'reCAPTCHA action mismatch', score: data.score };
         }
-
-        // Check score threshold
-        if (data.score < MIN_SCORE) {
-            console.warn(`[reCAPTCHA] Low score: ${data.score} for action: ${data.action}`);
-            return { success: false, error: 'reCAPTCHA score too low', score: data.score };
+        if (typeof data.score === 'number' && data.score < MIN_SCORE) {
+            return { success: false, verified: false, error: 'reCAPTCHA score too low', score: data.score };
         }
-
-        return { success: true, score: data.score };
-    } catch (error: any) {
-        console.error('[reCAPTCHA] Verification error:', error.message);
-        return { success: false, error: 'reCAPTCHA verification request failed' };
+        return { success: true, verified: true, score: data.score };
+    } catch {
+        console.error('[reCAPTCHA] verification request failed');
+        return { success: false, verified: false, error: 'reCAPTCHA verification request failed' };
     }
 }

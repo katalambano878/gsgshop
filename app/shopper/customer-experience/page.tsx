@@ -50,7 +50,7 @@ export default function CustomerExperience() {
                   <i className="ri-whatsapp-line text-green-600 text-xl"></i>
                 </div>
                 <div>
-                  <h3 className="font-bold text-gray-900">WhatsApp (24/7)</h3>
+                  <h3 className="font-bold text-gray-900">WhatsApp</h3>
                   <p className="text-gray-600 mt-1">
                     <a href="https://wa.me/233246033792" target="_blank" rel="noopener noreferrer" className="hover:text-green-600 block">+233 246 033 792</a>
                     <a href="https://wa.me/233579033792" target="_blank" rel="noopener noreferrer" className="hover:text-green-600 block">+233 579 033 792</a>
@@ -63,7 +63,7 @@ export default function CustomerExperience() {
                   <i className="ri-telegram-line text-blue-500 text-xl"></i>
                 </div>
                 <div>
-                  <h3 className="font-bold text-gray-900">Telegram (24/7)</h3>
+                  <h3 className="font-bold text-gray-900">Telegram</h3>
                   <p className="text-gray-600 mt-1">
                     <a href="https://t.me/gsgbrandsgh" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500">@gsgbrandsgh</a>
                   </p>
@@ -134,7 +134,7 @@ export default function CustomerExperience() {
 
               <div className="bg-gray-50 p-4 rounded-xl mt-6">
                 <p className="text-sm text-gray-600 text-center">
-                  <strong>Note:</strong> WhatsApp and Telegram channels are monitored 24/7 for urgent inquiries and order adjustments.
+                  <strong>Note:</strong> You can message us on WhatsApp or Telegram at any time. We reply during the hours above.
                 </p>
               </div>
             </div>

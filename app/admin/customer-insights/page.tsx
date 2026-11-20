@@ -3,6 +3,29 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import { downloadCsv, csvMoney } from '@/lib/csv';
+import { isPlaceholderEmail } from '@/lib/placeholder-email';
+
+/** Page through a query 1000 rows at a time (one select is capped at 1000 rows). */
+async function fetchAllRows<T = any>(build: () => any): Promise<T[]> {
+  const pageSize = 1000;
+  const rows: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await build().range(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...((data || []) as T[]));
+    if (!data || data.length < pageSize) break;
+  }
+  return rows;
+}
+
+/** Last 9 digits of a phone number, so 024…, +23324… and 23324… match. */
+const phoneKey = (phone?: string | null) => {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits.length >= 9 ? digits.slice(-9) : '';
+};
+/** Lower-cased email; placeholder addresses (till walk-ins, WhatsApp orders) never match anyone. */
+const emailKey = (email?: string | null) => (isPlaceholderEmail(email) ? '' : String(email || '').trim().toLowerCase());
 
 // Helper for currency formatting
 const formatCurrency = (amount: number) => {
@@ -17,6 +40,7 @@ export default function CustomerInsightsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [customers, setCustomers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Statistics
   const [stats, setStats] = useState({
@@ -24,6 +48,7 @@ export default function CustomerInsightsPage() {
     returning: 0,
     new: 0,
     atRisk: 0,
+    noOrders: 0,
     avgCLV: 0
   });
 
@@ -35,84 +60,121 @@ export default function CustomerInsightsPage() {
     try {
       setLoading(true);
 
-      // 1. Fetch Profiles
-      const { data: profiles, error: profileError } = await supabase
-        .from('profiles')
-        .select('*');
+      // 1. Every customer record: registered shoppers, guests and till customers.
+      const customerRows = await fetchAllRows<any>(() =>
+        supabase
+          .from('customers')
+          .select('id, user_id, email, phone, secondary_email, secondary_phone, full_name, first_name, last_name, created_at')
+          .order('created_at', { ascending: false })
+      );
 
-      if (profileError) throw profileError;
+      // 2. Real sales only: paid, not cancelled or refunded.
+      const orders = await fetchAllRows<any>(() =>
+        supabase
+          .from('orders')
+          .select('id, user_id, email, phone, total, created_at, status')
+          .eq('payment_status', 'paid')
+          .not('status', 'in', '(cancelled,refunded)')
+          .order('created_at', { ascending: false })
+      );
 
-      // 2. Fetch Orders for calculations
-      const { data: orders, error: orderError } = await supabase
-        .from('orders')
-        .select('user_id, total, created_at, status');
+      const byUser = new Map<string, any[]>();
+      const byEmail = new Map<string, any[]>();
+      const byPhone = new Map<string, any[]>();
+      const push = (map: Map<string, any[]>, key: string, o: any) => {
+        if (!key) return;
+        const list = map.get(key) || [];
+        list.push(o);
+        map.set(key, list);
+      };
+      for (const o of orders) {
+        if (o.user_id) push(byUser, o.user_id, o);
+        push(byEmail, emailKey(o.email), o);
+        push(byPhone, phoneKey(o.phone), o);
+      }
 
-      if (orderError) throw orderError;
+      const now = Date.now();
+      const aggregated = customerRows
+        .map((c: any) => {
+          // Orders placed signed in, or as a guest / at the till with this email or phone.
+          const matched = new Map<string, any>();
+          const add = (list?: any[]) => list?.forEach((o) => matched.set(o.id, o));
+          if (c.user_id) add(byUser.get(c.user_id));
+          add(byEmail.get(emailKey(c.email)));
+          add(byEmail.get(emailKey(c.secondary_email)));
+          add(byPhone.get(phoneKey(c.phone)));
+          add(byPhone.get(phoneKey(c.secondary_phone)));
+          const userOrders = Array.from(matched.values());
 
-      // 3. Aggregate Data
-      const aggregated = profiles.map((profile: any) => {
-        const userOrders = orders?.filter(o => o.user_id === profile.id) || [];
-        const totalSpent = userOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-        const orderCount = userOrders.length;
+          const totalSpent = userOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+          const orderCount = userOrders.length;
+          const lastPaidAt = userOrders.reduce<string | null>(
+            (latest, o) => (!latest || o.created_at > latest ? o.created_at : latest),
+            null
+          );
+          const lastOrderDate = lastPaidAt;
 
-        // Sort orders to find last order
-        const sortedOrders = [...userOrders].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        const lastOrderDate = sortedOrders[0]?.created_at || profile.created_at;
+          const joinDate = c.created_at;
+          const daysSinceJoin = (now - new Date(joinDate).getTime()) / (1000 * 3600 * 24);
+          const daysSinceLastOrder = lastOrderDate
+            ? (now - new Date(lastOrderDate).getTime()) / (1000 * 3600 * 24)
+            : Infinity;
 
-        // Calculate Segment
-        let segment = 'new';
-        const daysSinceJoin = (new Date().getTime() - new Date(profile.created_at).getTime()) / (1000 * 3600 * 24);
-        const daysSinceLastOrder = (new Date().getTime() - new Date(lastOrderDate).getTime()) / (1000 * 3600 * 24);
+          let segment = 'new';
+          if (totalSpent > 1000) segment = 'vip';
+          else if (orderCount > 0 && daysSinceLastOrder > 90) segment = 'at-risk';
+          else if (orderCount > 1) segment = 'returning';
+          else if (orderCount === 1 || daysSinceJoin < 30) segment = 'new';
+          else segment = 'no-orders';
 
-        if (totalSpent > 1000) segment = 'vip'; // VIP Threshold
-        else if (orderCount > 1) segment = 'returning';
-        else if (daysSinceLastOrder > 90 && orderCount > 0) segment = 'at-risk';
-        else if (daysSinceJoin < 30) segment = 'new';
-        else segment = 'returning'; // Default bucket
+          // Inactivity from the last paid order only: no invented scores.
+          let riskLevel = orderCount === 0 ? 'none' : 'low';
+          if (orderCount > 0 && daysSinceLastOrder > 60) riskLevel = 'medium';
+          if (orderCount > 0 && daysSinceLastOrder > 120) riskLevel = 'high';
 
-        // Risk Level
-        let riskLevel = 'low';
-        if (daysSinceLastOrder > 60) riskLevel = 'medium';
-        if (daysSinceLastOrder > 120) riskLevel = 'high';
+          const name =
+            c.full_name ||
+            [c.first_name, c.last_name].filter(Boolean).join(' ') ||
+            (c.email ? String(c.email).split('@')[0] : '') ||
+            'Unknown';
 
-        // Engagement Score (mock logic for now based on frequency)
-        let engagementScore = 50;
-        if (segment === 'vip') engagementScore += 40;
-        if (riskLevel === 'high') engagementScore -= 30;
-        if (daysSinceLastOrder < 30) engagementScore += 20;
-
-        return {
-          id: profile.id,
-          name: profile.full_name || 'Unknown User',
-          email: profile.email,
-          phone: profile.phone || '-',
-          segment,
-          totalSpent,
-          orders: orderCount,
-          avgOrderValue: orderCount > 0 ? totalSpent / orderCount : 0,
-          lifetimeValue: totalSpent, // Simple CLV for now
-          joinDate: profile.created_at,
-          lastOrder: lastOrderDate,
-          riskLevel,
-          engagementScore: Math.min(100, Math.max(0, engagementScore)),
-          tags: [] // Could be populated from metadata
-        };
-      });
+          return {
+            id: c.id,
+            name,
+            email: isPlaceholderEmail(c.email) ? '' : c.email || '',
+            phone: c.phone || '-',
+            isGuest: !c.user_id,
+            segment,
+            totalSpent,
+            orders: orderCount,
+            avgOrderValue: orderCount > 0 ? totalSpent / orderCount : 0,
+            lifetimeValue: totalSpent,
+            joinDate,
+            lastOrder: lastOrderDate,
+            riskLevel,
+            daysSinceLastOrder: Number.isFinite(daysSinceLastOrder) ? Math.floor(daysSinceLastOrder) : null,
+            tags: []
+          };
+        });
 
       setCustomers(aggregated);
 
       // Calculate Stats
       const totalCLV = aggregated.reduce((sum, c) => sum + c.lifetimeValue, 0);
+      const buyers = aggregated.filter(c => c.orders > 0);
       setStats({
         vip: aggregated.filter(c => c.segment === 'vip').length,
         returning: aggregated.filter(c => c.segment === 'returning').length,
         new: aggregated.filter(c => c.segment === 'new').length,
         atRisk: aggregated.filter(c => c.segment === 'at-risk').length,
-        avgCLV: aggregated.length > 0 ? totalCLV / aggregated.length : 0
+        noOrders: aggregated.filter(c => c.segment === 'no-orders').length,
+        // Average over customers who have bought something.
+        avgCLV: buyers.length > 0 ? totalCLV / buyers.length : 0
       });
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching customer insights:', err);
+      setLoadError(err?.message || 'Could not load customer insights.');
     } finally {
       setLoading(false);
     }
@@ -120,18 +182,41 @@ export default function CustomerInsightsPage() {
 
 
   const filteredCustomers = customers.filter(customer => {
-    const matchesSearch = customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      customer.email.toLowerCase().includes(searchTerm.toLowerCase());
+    const q = searchTerm.toLowerCase();
+    const matchesSearch = customer.name.toLowerCase().includes(q) ||
+      customer.email.toLowerCase().includes(q) ||
+      String(customer.phone || '').toLowerCase().includes(q);
     const matchesSegment = selectedSegment === 'all' || customer.segment === selectedSegment;
     return matchesSearch && matchesSegment;
   });
+
+  const handleExport = () => {
+    downloadCsv(
+      `customer-insights-${selectedSegment}-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Name', 'Email', 'Phone', 'Type', 'Segment', 'Paid Orders', 'Total Spent (GHS)', 'Avg Order (GHS)', 'Risk', 'Joined', 'Last Paid Order'],
+      filteredCustomers.map(c => [
+        c.name,
+        c.email,
+        c.phone === '-' ? '' : c.phone,
+        c.isGuest ? 'Guest / till' : 'Registered',
+        getSegmentLabel(c.segment),
+        c.orders,
+        csvMoney(c.totalSpent),
+        csvMoney(c.avgOrderValue),
+        c.riskLevel === 'none' ? '' : c.riskLevel,
+        c.joinDate ? new Date(c.joinDate).toLocaleDateString('en-GB') : '',
+        c.lastOrder ? new Date(c.lastOrder).toLocaleDateString('en-GB') : '',
+      ])
+    );
+  };
 
   const getSegmentBadge = (segment: string) => {
     const badges: any = {
       vip: 'bg-blue-100 text-blue-700',
       returning: 'bg-blue-100 text-blue-700',
       new: 'bg-amber-100 text-amber-700',
-      'at-risk': 'bg-red-100 text-red-700'
+      'at-risk': 'bg-red-100 text-red-700',
+      'no-orders': 'bg-gray-100 text-gray-700'
     };
     return badges[segment] || 'bg-gray-100 text-gray-700';
   };
@@ -141,7 +226,8 @@ export default function CustomerInsightsPage() {
       vip: 'VIP Customer',
       returning: 'Returning',
       new: 'New Customer',
-      'at-risk': 'At Risk'
+      'at-risk': 'At Risk',
+      'no-orders': 'No Paid Orders'
     };
     return labels[segment] || segment;
   };
@@ -166,9 +252,13 @@ export default function CustomerInsightsPage() {
             <p className="text-gray-600 mt-1 md:mt-2 text-sm md:text-base">Deep dive into customer behavior and lifetime value</p>
           </div>
           <div className="flex flex-col sm:flex-row gap-3">
-            <button className="border-2 border-gray-300 hover:border-gray-400 text-gray-700 px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap flex items-center justify-center">
+            <button
+              onClick={handleExport}
+              disabled={filteredCustomers.length === 0}
+              className="border-2 border-gray-300 hover:border-gray-400 text-gray-700 px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               <i className="ri-download-line mr-2"></i>
-              Export List
+              Export List ({filteredCustomers.length})
             </button>
             <Link
               href="/admin"
@@ -178,6 +268,12 @@ export default function CustomerInsightsPage() {
             </Link>
           </div>
         </div>
+
+        {loadError && (
+          <div className="mb-6 p-4 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm" role="alert">
+            {loadError}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <div className="bg-white rounded-xl shadow-sm p-6">
@@ -221,7 +317,7 @@ export default function CustomerInsightsPage() {
             </div>
             <p className="text-sm text-gray-600 mb-1">Avg. Lifetime Value</p>
             <p className="text-3xl font-bold text-gray-900">{formatCurrency(stats.avgCLV)}</p>
-            <p className="text-sm text-gray-500 mt-2">Per customer</p>
+            <p className="text-sm text-gray-500 mt-2">Per paying customer</p>
           </div>
         </div>
 
@@ -232,7 +328,8 @@ export default function CustomerInsightsPage() {
                 <i className="ri-search-line absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-xl"></i>
                 <input
                   type="text"
-                  placeholder="Search customers by name or email..."
+                  placeholder="Search customers by name, email or phone..."
+                  aria-label="Search customers"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-12 pr-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
@@ -246,7 +343,8 @@ export default function CustomerInsightsPage() {
                 { value: 'vip', label: 'VIP', count: stats.vip },
                 { value: 'returning', label: 'Returning', count: stats.returning },
                 { value: 'new', label: 'New', count: stats.new },
-                { value: 'at-risk', label: 'At Risk', count: stats.atRisk }
+                { value: 'at-risk', label: 'At Risk', count: stats.atRisk },
+                { value: 'no-orders', label: 'No Orders', count: stats.noOrders }
               ].map((segment) => (
                 <button
                   key={segment.value}
@@ -277,8 +375,13 @@ export default function CustomerInsightsPage() {
                       {customer.name?.charAt(0).toUpperCase() || 'U'}
                     </div>
                     <div>
-                      <h3 className="text-xl font-bold text-gray-900">{customer.name}</h3>
-                      <div className="flex items-center space-x-3 mt-1 text-sm text-gray-600">
+                      <h3 className="text-xl font-bold text-gray-900">
+                        <Link href={`/admin/customers/${customer.id}`} className="hover:underline">{customer.name}</Link>
+                        {customer.isGuest && (
+                          <span className="ml-2 align-middle px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Guest / till</span>
+                        )}
+                      </h3>
+                      <div className="flex flex-wrap items-center gap-x-3 mt-1 text-sm text-gray-600">
                         <span className="flex items-center">
                           <i className="ri-mail-line mr-1"></i>
                           {customer.email}
@@ -292,17 +395,19 @@ export default function CustomerInsightsPage() {
                         <span className={`px-3 py-1 rounded-full text-sm font-medium ${getSegmentBadge(customer.segment)} whitespace-nowrap`}>
                           {getSegmentLabel(customer.segment)}
                         </span>
-                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${getRiskBadge(customer.riskLevel)} whitespace-nowrap`}>
-                          {customer.riskLevel === 'low' && 'Low Risk'}
-                          {customer.riskLevel === 'medium' && 'Medium Risk'}
-                          {customer.riskLevel === 'high' && 'High Risk'}
-                        </span>
+                        {customer.riskLevel !== 'none' && (
+                          <span
+                            className={`px-3 py-1 rounded-full text-sm font-medium ${getRiskBadge(customer.riskLevel)} whitespace-nowrap`}
+                            title="From days since the last paid order: low up to 60, medium 61–120, high over 120"
+                          >
+                            {customer.riskLevel === 'low' && 'Active'}
+                            {customer.riskLevel === 'medium' && 'Quiet 60+ days'}
+                            {customer.riskLevel === 'high' && 'Quiet 120+ days'}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
-                  {/* <button className="text-gray-400 hover:text-gray-600 transition-colors">
-                    <i className="ri-more-2-fill text-2xl"></i>
-                    </button> */}
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
@@ -311,7 +416,7 @@ export default function CustomerInsightsPage() {
                     <p className="text-2xl font-bold text-gray-900">{formatCurrency(customer.totalSpent)}</p>
                   </div>
                   <div className="bg-gray-50 rounded-lg p-4">
-                    <p className="text-sm text-gray-600 mb-1">Orders</p>
+                    <p className="text-sm text-gray-600 mb-1">Paid Orders</p>
                     <p className="text-2xl font-bold text-gray-900">{customer.orders}</p>
                   </div>
                   <div className="bg-gray-50 rounded-lg p-4">
@@ -323,19 +428,8 @@ export default function CustomerInsightsPage() {
                     <p className="text-2xl font-bold text-blue-700">{formatCurrency(customer.lifetimeValue)}</p>
                   </div>
                   <div className="bg-gray-50 rounded-lg p-4">
-                    <p className="text-sm text-gray-600 mb-1">Engagement</p>
-                    <div className="flex items-center space-x-2">
-                      <div className="flex-1 bg-gray-200 rounded-full h-2">
-                        <div
-                          className={`h-2 rounded-full ${customer.engagementScore >= 80 ? 'bg-blue-600' :
-                            customer.engagementScore >= 60 ? 'bg-blue-600' :
-                              customer.engagementScore >= 40 ? 'bg-amber-600' : 'bg-red-600'
-                            }`}
-                          style={{ width: `${customer.engagementScore}%` }}
-                        ></div>
-                      </div>
-                      <span className="text-sm font-bold text-gray-900">{customer.engagementScore}%</span>
-                    </div>
+                    <p className="text-sm text-gray-600 mb-1">Days Since Last Order</p>
+                    <p className="text-2xl font-bold text-gray-900">{customer.daysSinceLastOrder ?? '–'}</p>
                   </div>
                 </div>
 
@@ -345,7 +439,7 @@ export default function CustomerInsightsPage() {
                       <span className="font-medium">Joined:</span> {new Date(customer.joinDate).toLocaleDateString('en-GB')}
                     </span>
                     <span>
-                      <span className="font-medium">Last Order:</span> {new Date(customer.lastOrder).toLocaleDateString('en-GB')}
+                      <span className="font-medium">Last Paid Order:</span> {customer.lastOrder ? new Date(customer.lastOrder).toLocaleDateString('en-GB') : 'None'}
                     </span>
                   </div>
                 </div>

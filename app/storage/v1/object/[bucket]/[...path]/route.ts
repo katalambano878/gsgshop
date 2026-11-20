@@ -1,16 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
-import { acceptedUploadType, createStorageClient, MAX_VIDEO_BYTES, uploadLimitFor } from "@/lib/db/storage";
+import { acceptedUploadType, createStorageClient, MAX_UPLOAD_BYTES, uploadLimitFor } from "@/lib/db/storage";
 import { isPlainPostgres } from "@/lib/db/mode";
 import { authorizeStorageWrite as authorize } from "@/lib/db/storage-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+/** Multipart framing allowance on top of the largest file. */
+const BODY_SLACK_BYTES = 1024 * 1024;
+
+class TooLarge extends Error {}
+
+/** The raw body, refused as soon as it passes `cap` bytes (whatever Content-Length says). */
+async function readCapped(req: NextRequest, cap: number): Promise<Buffer> {
+  const reader = req.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > cap) {
+      await reader.cancel().catch(() => {});
+      throw new TooLarge();
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
 /** supabase-js sends Blob/File uploads as multipart form data, buffers as raw bytes. */
 async function readUpload(req: NextRequest): Promise<{ bytes: Buffer; contentType: string }> {
   const headerType = req.headers.get("content-type") || "application/octet-stream";
+  const raw = await readCapped(req, MAX_UPLOAD_BYTES + BODY_SLACK_BYTES);
   if (headerType.includes("multipart/form-data")) {
-    const form = await req.formData();
+    const form = await new Response(new Uint8Array(raw), { headers: { "content-type": headerType } }).formData();
     for (const value of form.values()) {
       if (typeof value !== "string") {
         return {
@@ -21,7 +46,7 @@ async function readUpload(req: NextRequest): Promise<{ bytes: Buffer; contentTyp
     }
     throw new Error("No file in upload");
   }
-  return { bytes: Buffer.from(await req.arrayBuffer()), contentType: headerType };
+  return { bytes: raw, contentType: headerType };
 }
 
 function tooLarge() {
@@ -29,7 +54,7 @@ function tooLarge() {
     {
       statusCode: "413",
       error: "Payload too large",
-      message: "The file is too large. Images may be up to 15 MB and videos up to 60 MB.",
+      message: "The file is too large. Images and PDFs may be up to 15 MB.",
     },
     { status: 413 }
   );
@@ -46,20 +71,21 @@ async function store(req: NextRequest, ctx: { params: Promise<{ bucket: string; 
   const objectPath = path.map(decodeURIComponent).join("/");
   // Refuse oversized bodies before reading them (multipart adds a little framing).
   const declared = Number(req.headers.get("content-length") || 0);
-  if (declared > MAX_VIDEO_BYTES + 1024 * 1024) return tooLarge();
+  if (declared > MAX_UPLOAD_BYTES + BODY_SLACK_BYTES) return tooLarge();
   let upload;
   try {
     upload = await readUpload(req);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || "Invalid upload" }, { status: 400 });
+    if (e instanceof TooLarge) return tooLarge();
+    return NextResponse.json({ statusCode: "400", error: "invalid_upload", message: "The upload could not be read." }, { status: 400 });
   }
 
-  // Only images, videos and PDFs: an uploaded HTML/script file served from
-  // this origin would run as the store.
+  // Only images and PDFs: an uploaded HTML/script file served from this
+  // origin would run as the store.
   const contentType = acceptedUploadType(objectPath, upload.contentType);
   if (!contentType) {
     return NextResponse.json(
-      { statusCode: "415", error: "invalid_mime_type", message: "Only image, video or PDF files can be uploaded." },
+      { statusCode: "415", error: "invalid_mime_type", message: "Only image or PDF files can be uploaded." },
       { status: 415 }
     );
   }
@@ -71,7 +97,12 @@ async function store(req: NextRequest, ctx: { params: Promise<{ bucket: string; 
     upsert: upsert || (req.headers.get("x-upsert") || "").toLowerCase() === "true",
   });
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
+    // Supabase answers an existing object without upsert with 409 Duplicate.
+    if (error.statusCode === "409") {
+      return NextResponse.json({ statusCode: "409", error: "Duplicate", message: error.message }, { status: 409 });
+    }
+    console.error("[storage] upload failed:", error.message);
+    return NextResponse.json({ statusCode: "400", error: "upload_failed", message: "The file could not be saved." }, { status: 400 });
   }
 
   const { data: pub } = storage.from(bucket).getPublicUrl(objectPath);

@@ -99,14 +99,9 @@ export default function PWAInstaller() {
           console.error('[PWA] Service Worker registration failed:', error);
         });
 
-      // Handle controller change (new SW activated)
-      let refreshing = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (!refreshing) {
-          refreshing = true;
-          window.location.reload();
-        }
-      });
+      // A new version never reloads the page by itself (that wiped half-filled
+      // forms such as checkout). UpdatePrompt reloads only after the customer
+      // taps "Update".
     }
 
     return () => {

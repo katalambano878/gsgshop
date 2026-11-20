@@ -251,6 +251,6 @@ export const DELIVERY_FORMULA_COPY = [
     name: 'Pickup',
     schedule: 'Daily after confirmation',
     formula: 'GH₵0 — no delivery fee',
-    note: 'Pickup location is shown at the confirmation stage. Collect your items at your convenience.',
+    note: 'Collect from the GSG pickup hub (name and address from the live delivery settings) after we confirm your order is ready.',
   },
 ];

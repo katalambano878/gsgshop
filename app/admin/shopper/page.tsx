@@ -33,13 +33,25 @@ const PAYMENT_COLORS: Record<string, string> = {
   paid: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   failed: 'bg-red-50 text-red-700 border-red-200',
   refunded: 'bg-purple-50 text-purple-700 border-purple-200',
+  partially_refunded: 'bg-purple-50 text-purple-700 border-purple-200',
 };
+
+const PAYMENT_LABELS: Record<string, string> = {
+  pending: 'Not paid',
+  paid: 'Paid',
+  failed: 'Payment failed',
+  refunded: 'Refunded',
+  partially_refunded: 'Part refunded',
+};
+
+const PAGE_SIZE = 50;
 
 const PAYMENT_ICONS: Record<string, string> = {
   pending: 'ri-time-line',
   paid: 'ri-checkbox-circle-fill',
   failed: 'ri-close-circle-fill',
   refunded: 'ri-refund-2-line',
+  partially_refunded: 'ri-refund-2-line',
 };
 
 const fmtGHS = (n: number | string | null | undefined) => {
@@ -50,51 +62,70 @@ const fmtGHS = (n: number | string | null | undefined) => {
 export default function AdminShopperRequests() {
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [paymentFilter, setPaymentFilter] = useState<string>('ALL');
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+
+  useEffect(() => {
+    setPage(0);
+  }, [statusFilter, paymentFilter]);
 
   useEffect(() => {
     fetchRequests();
-  }, [statusFilter, paymentFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch when filters or page change
+  }, [statusFilter, paymentFilter, page]);
 
+  // One page at a time from the server, with an exact total, so nothing past
+  // the first 1000 rows goes missing.
   const fetchRequests = async () => {
     setLoading(true);
     try {
       let query = supabase
         .from('shopper_requests')
-        .select('id, request_number, status, payment_status, payment_provider, payment_method, paid_at, total_est, total_final, contact_name, contact_phone, contact_email, created_at')
-        .order('created_at', { ascending: false });
+        .select('id, request_number, status, payment_status, payment_provider, payment_method, paid_at, total_est, total_final, contact_name, contact_phone, contact_email, created_at', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
 
       if (statusFilter !== 'ALL') query = query.eq('status', statusFilter);
       if (paymentFilter !== 'ALL') query = query.eq('payment_status', paymentFilter);
 
-      const { data, error } = await query;
+      const { data, error, count } = await query.range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
       if (error) throw error;
       setRequests(data || []);
-    } catch (err) {
-      console.error('Error fetching requests:', err);
+      setTotal(count ?? (data || []).length);
+      setLoadError('');
+    } catch (err: any) {
+      setLoadError(`Could not load requests: ${err?.message || 'unknown error'}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Counts for the quick filter chips at the top
+  // Counts for the quick filter chips at the top (head-only counts, no row cap).
   const [counts, setCounts] = useState<{ all: number; paid: number; pending: number; cancelled: number; awaiting: number }>({ all: 0, paid: 0, pending: 0, cancelled: 0, awaiting: 0 });
   useEffect(() => {
     (async () => {
-      const { data } = await supabase
-        .from('shopper_requests')
-        .select('status, payment_status');
-      if (!data) return;
+      const head = () => supabase.from('shopper_requests').select('id', { count: 'exact', head: true });
+      const [all, paid, pending, cancelled, awaiting] = await Promise.all([
+        head(),
+        head().eq('payment_status', 'paid'),
+        head().eq('payment_status', 'pending'),
+        head().eq('status', 'CANCELLED'),
+        head().eq('status', 'AWAITING_CONFIRMATION'),
+      ]);
       setCounts({
-        all: data.length,
-        paid: data.filter(r => r.payment_status === 'paid').length,
-        pending: data.filter(r => r.payment_status === 'pending').length,
-        cancelled: data.filter(r => r.status === 'CANCELLED').length,
-        awaiting: data.filter(r => r.status === 'AWAITING_CONFIRMATION').length,
+        all: all.count || 0,
+        paid: paid.count || 0,
+        pending: pending.count || 0,
+        cancelled: cancelled.count || 0,
+        awaiting: awaiting.count || 0,
       });
     })();
-  }, [requests.length]);
+  }, [requests]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="p-8">
@@ -125,7 +156,7 @@ export default function AdminShopperRequests() {
           onClick={() => { setStatusFilter('ALL'); setPaymentFilter('pending'); }}
           className={`text-left bg-white rounded-xl border p-4 hover:border-amber-400 transition-colors ${paymentFilter === 'pending' ? 'border-amber-500' : 'border-gray-200'}`}
         >
-          <p className="text-xs font-bold uppercase tracking-wider text-amber-600">Awaiting payment</p>
+          <p className="text-xs font-bold uppercase tracking-wider text-amber-600">Not paid</p>
           <p className="text-2xl font-bold text-amber-700 mt-1">{counts.pending}</p>
         </button>
         <button
@@ -147,8 +178,9 @@ export default function AdminShopperRequests() {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-4 border-b border-gray-200 flex flex-wrap gap-3 items-center">
           <div className="flex items-center gap-2">
-            <label className="text-xs font-bold uppercase tracking-wider text-gray-500">Status</label>
+            <label htmlFor="shopper-status-filter" className="text-xs font-bold uppercase tracking-wider text-gray-500">Status</label>
             <select
+              id="shopper-status-filter"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               className="p-2 border border-gray-300 rounded-lg outline-none text-sm"
@@ -160,17 +192,19 @@ export default function AdminShopperRequests() {
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-xs font-bold uppercase tracking-wider text-gray-500">Payment</label>
+            <label htmlFor="shopper-payment-filter" className="text-xs font-bold uppercase tracking-wider text-gray-500">Payment</label>
             <select
+              id="shopper-payment-filter"
               value={paymentFilter}
               onChange={(e) => setPaymentFilter(e.target.value)}
               className="p-2 border border-gray-300 rounded-lg outline-none text-sm"
             >
               <option value="ALL">All</option>
-              <option value="pending">Pending</option>
+              <option value="pending">Not paid</option>
               <option value="paid">Paid</option>
-              <option value="failed">Failed</option>
+              <option value="failed">Payment failed</option>
               <option value="refunded">Refunded</option>
+              <option value="partially_refunded">Part refunded</option>
             </select>
           </div>
           {(statusFilter !== 'ALL' || paymentFilter !== 'ALL') && (
@@ -183,6 +217,9 @@ export default function AdminShopperRequests() {
           )}
         </div>
 
+        {loadError && (
+          <div className="m-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm" role="alert">{loadError}</div>
+        )}
         {loading ? (
           <div className="p-8 text-center text-gray-500">Loading requests...</div>
         ) : requests.length === 0 ? (
@@ -246,7 +283,7 @@ export default function AdminShopperRequests() {
                       <td className="p-4">
                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${payColor}`}>
                           <i className={payIcon} />
-                          {(req.payment_status || 'pending').toUpperCase()}
+                          {PAYMENT_LABELS[req.payment_status || 'pending'] || req.payment_status}
                         </span>
                         {req.payment_status === 'paid' && (
                           <div className="text-[11px] text-emerald-600 mt-1 capitalize">
@@ -275,6 +312,30 @@ export default function AdminShopperRequests() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+        {!loading && total > 0 && (
+          <div className="p-4 border-t border-gray-200 flex items-center justify-between text-sm text-gray-600">
+            <span>
+              Showing {page * PAGE_SIZE + 1}–{Math.min(total, (page + 1) * PAGE_SIZE)} of {total}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-40 hover:bg-gray-50 cursor-pointer"
+              >
+                Previous
+              </button>
+              <span>Page {page + 1} of {pageCount}</span>
+              <button
+                onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}
+                disabled={page >= pageCount - 1}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-40 hover:bg-gray-50 cursor-pointer"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>

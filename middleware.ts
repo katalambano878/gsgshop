@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { jwtVerify, errors as joseErrors } from 'jose';
-import { authJwtSecret } from '@/lib/db/mode';
+import { authJwtSecret, sessionClaimsValid } from '@/lib/db/mode';
 
 // ============================================================
 // Admin session check (edge-safe)
@@ -48,11 +48,10 @@ async function checkToken(request: NextRequest, token: string): Promise<TokenChe
     let userId: string;
     try {
         const { payload } = await jwtVerify(token, new TextEncoder().encode(secret), { algorithms: ['HS256'] });
-        if (payload.typ === 'refresh' || payload.role !== 'authenticated' || typeof payload.sub !== 'string') {
-            return { status: 'invalid' };
-        }
-        if (typeof payload.exp !== 'number') return { status: 'invalid' };
-        userId = payload.sub;
+        // A session access token for this app: not a refresh token, not the
+        // anon/service key, has an expiry, a subject and this app's audience.
+        if (!sessionClaimsValid(payload as Record<string, unknown>)) return { status: 'invalid' };
+        userId = payload.sub as string;
     } catch (e) {
         return { status: e instanceof joseErrors.JWTExpired ? 'expired' : 'invalid' };
     }
@@ -204,11 +203,14 @@ export async function middleware(request: NextRequest) {
             return NextResponse.redirect(loginUrl);
         }
         if (check.status === 'unverified') {
-            // The role lookup could not run (app restarting, loopback blocked).
-            // As before, a lookup error lets a signed session through: the
-            // admin layout still checks the role, and row-level security
-            // still guards every read and write. Logged for monitoring.
-            console.error('[Middleware] Auth check error: role lookup unavailable');
+            // The role lookup could not run (app restarting, database blip,
+            // loopback blocked). Fail closed only on a bad token or a wrong
+            // role; here the signature is valid, so staff are not locked out
+            // by a restart. The admin layout still checks the role, and
+            // row-level security and the server routes' own role checks
+            // still guard every read and write. Logged for monitoring.
+            console.error(`[Middleware] role lookup unavailable; letting a validly signed session through (user ${check.userId}, ${pathname})`);
+            response.headers.set('x-user-id', check.userId);
         } else {
             if (check.role !== 'admin' && check.role !== 'staff') {
                 const loginUrl = new URL('/admin/login', request.url);

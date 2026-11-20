@@ -32,7 +32,7 @@ export async function GET() {
             .order('name', { ascending: true });
 
         if (error) {
-            console.error('[Storefront API] Categories error:', error);
+            console.error('[storefront/categories] failed:', error.message);
             return NextResponse.json({ error: 'Failed to fetch categories' }, { status: 500 });
         }
 
@@ -46,7 +46,7 @@ export async function GET() {
             }
         });
     } catch (err: any) {
-        console.error('[Storefront API] Error:', err);
-        return NextResponse.json({ error: err.message }, { status: 500 });
+        console.error('[storefront/categories] failed:', err?.message);
+        return NextResponse.json({ error: 'Failed to fetch categories' }, { status: 500 });
     }
 }

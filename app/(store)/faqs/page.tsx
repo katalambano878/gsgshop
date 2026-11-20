@@ -1,12 +1,32 @@
 "use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { FAQ_CATEGORIES, STORE_FAQS } from '@/lib/faq-content';
+
+/** Stable anchor for a question, e.g. /faqs#what-is-your-return-policy */
+function faqAnchor(question: string): string {
+  return question.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
 
 export default function FAQsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
+
+  // Open the question named in the address (#anchor), e.g. links from the help centre.
+  useEffect(() => {
+    const open = () => {
+      const id = decodeURIComponent(window.location.hash.slice(1));
+      const el = id ? document.getElementById(id) : null;
+      if (el instanceof HTMLDetailsElement) {
+        el.open = true;
+        el.scrollIntoView({ block: 'start' });
+      }
+    };
+    open();
+    window.addEventListener('hashchange', open);
+    return () => window.removeEventListener('hashchange', open);
+  }, []);
 
   const categories = FAQ_CATEGORIES;
   const faqs = STORE_FAQS;
@@ -32,14 +52,16 @@ export default function FAQsPage() {
             </p>
 
             <div className="relative">
+              <label htmlFor="faq-search" className="sr-only">Search the FAQs</label>
               <input
-                type="text"
+                id="faq-search"
+                type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search for answers..."
                 className="w-full pl-12 pr-4 py-4 border border-gray-300 rounded-full focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm shadow-lg"
               />
-              <i className="ri-search-line absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 text-xl"></i>
+              <i className="ri-search-line absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 text-xl" aria-hidden="true"></i>
             </div>
           </div>
         </div>
@@ -50,6 +72,8 @@ export default function FAQsPage() {
           {categories.map((category) => (
             <button
               key={category.id}
+              type="button"
+              aria-pressed={activeCategory === category.id}
               onClick={() => setActiveCategory(category.id)}
               className={`flex items-center gap-2 px-6 py-3 rounded-full font-medium transition-all whitespace-nowrap ${
                 activeCategory === category.id
@@ -65,9 +89,10 @@ export default function FAQsPage() {
 
         {filteredFAQs.length > 0 ? (
           <div className="max-w-4xl mx-auto space-y-4">
-            {filteredFAQs.map((faq, index) => (
+            {filteredFAQs.map((faq) => (
               <details
-                key={index}
+                key={faq.question}
+                id={faqAnchor(faq.question)}
                 className="bg-white border border-gray-200 rounded-2xl overflow-hidden hover:shadow-lg transition-shadow"
               >
                 <summary className="px-6 py-5 font-medium text-gray-900 cursor-pointer hover:bg-gray-50 transition-colors flex items-center justify-between">
@@ -100,7 +125,7 @@ export default function FAQsPage() {
           </div>
           <h2 className="text-3xl font-bold text-white mb-4">Still Have Questions?</h2>
           <p className="text-xl text-blue-100 mb-8 leading-relaxed">
-            Our customer service team is ready to help. Contact us and we'll respond within 24 hours.
+            Our team is ready to help. WhatsApp is the quickest way to reach us; we reply during opening hours.
           </p>
           <div className="flex flex-wrap gap-4 justify-center">
             <Link

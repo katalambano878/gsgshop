@@ -1,121 +1,78 @@
-'use client';
-
 import Link from 'next/link';
-import { useState } from 'react';
-import { useRecaptcha } from '@/hooks/useRecaptcha';
+import type { Metadata } from 'next';
+import {
+  PHONE_PRIMARY_DISPLAY,
+  PHONE_PRIMARY_TEL,
+  PHONE_SECONDARY_DISPLAY,
+  PHONE_SECONDARY_TEL,
+  HOURS_SUMMARY,
+  whatsappLink,
+} from '@/components/legal/business-facts';
 
+export const metadata: Metadata = {
+  title: 'Forgot your password?',
+  robots: { index: false, follow: true },
+};
+
+/**
+ * The shop cannot send email, so there is no reset link. A member of staff
+ * resets the password after checking who the customer is.
+ */
 export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState('');
-  const [isSubmitted, setIsSubmitted] = useState(false);
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const { getToken, verifying } = useRecaptcha();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setIsLoading(true);
-
-    if (!email) {
-      setError('Email is required');
-      setIsLoading(false);
-      return;
-    }
-    if (!/\S+@\S+\.\S+/.test(email)) {
-      setError('Please enter a valid email');
-      setIsLoading(false);
-      return;
-    }
-
-    // reCAPTCHA verification
-    const isHuman = await getToken('forgot_password');
-    if (!isHuman) {
-      setError('Security verification failed. Please try again.');
-      setIsLoading(false);
-      return;
-    }
-
-    setTimeout(() => {
-      setIsLoading(false);
-      setIsSubmitted(true);
-    }, 1500);
-  };
-
-  if (isSubmitted) {
-    return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6">
-        <div className="max-w-md w-full">
-          <div className="bg-white rounded-xl shadow-sm p-8 text-center">
-            <div className="w-16 h-16 flex items-center justify-center bg-blue-100 rounded-full mx-auto mb-6">
-              <i className="ri-mail-send-line text-3xl text-blue-700"></i>
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-3">Check Your Email</h1>
-            <p className="text-gray-600 mb-6">
-              We've sent a password reset link to <strong>{email}</strong>
-            </p>
-            <p className="text-sm text-gray-500 mb-8">
-              If you don't receive an email within a few minutes, please check your spam folder.
-            </p>
-            <Link
-              href="/auth/login"
-              className="inline-block bg-blue-700 hover:bg-blue-800 text-white px-8 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap"
-            >
-              Back to Sign In
-            </Link>
-          </div>
-        </div>
-      </main>
-    );
-  }
+  const waHref = whatsappLink("Hi GSG, I've forgotten my account password. My account email is: ");
 
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">Reset Password</h1>
-          <p className="text-gray-600">Enter your email to receive a reset link</p>
+          <h1 className="text-3xl font-bold text-gsg-black mb-2">Forgot your password?</h1>
+          <p className="text-gray-500">We reset passwords by WhatsApp or phone.</p>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm p-8">
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div>
-              <label className="block text-sm font-semibold text-gray-900 mb-2">
-                Email Address
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className={`w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                  error ? 'border-red-500' : 'border-gray-300'
-                }`}
-                placeholder="you@example.com"
-              />
-              {error && (
-                <p className="text-sm text-red-600 mt-2">{error}</p>
-              )}
-            </div>
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+          <ol className="space-y-4 text-gray-700 mb-8 list-decimal pl-5">
+            <li>Message us on WhatsApp or call us, and tell us the email address you use to sign in.</li>
+            <li>We check that the account is yours, for example with the phone number or a recent order on it.</li>
+            <li>Our team helps you back into your account. Once you are signed in, you can choose a new password under My Account.</li>
+          </ol>
 
-            <button
-              type="submit"
-              disabled={isLoading || verifying}
-              className="w-full bg-blue-700 hover:bg-blue-800 text-white py-4 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+          <div className="space-y-3">
+            <a
+              href={waHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center justify-center gap-2 bg-[#25D366] hover:bg-[#1ebe5b] text-white py-4 rounded-xl font-bold transition-colors"
             >
-              {isLoading || verifying ? (verifying ? 'Verifying...' : 'Sending...') : 'Send Reset Link'}
-            </button>
-          </form>
+              <i className="ri-whatsapp-line text-xl" aria-hidden="true"></i>
+              WhatsApp us
+            </a>
+            <a
+              href={`tel:${PHONE_PRIMARY_TEL}`}
+              className="w-full flex items-center justify-center gap-2 border-2 border-gray-200 hover:border-gsg-purple text-gsg-black py-4 rounded-xl font-bold transition-colors"
+            >
+              <i className="ri-phone-line text-xl" aria-hidden="true"></i>
+              Call {PHONE_PRIMARY_DISPLAY}
+            </a>
+            <p className="text-sm text-gray-500 text-center">
+              Or call <a href={`tel:${PHONE_SECONDARY_TEL}`} className="font-semibold text-gsg-purple hover:underline">{PHONE_SECONDARY_DISPLAY}</a>. {HOURS_SUMMARY}.
+            </p>
+          </div>
 
-          <p className="mt-8 text-center text-gray-600">
-            Remember your password?{' '}
-            <Link href="/auth/login" className="text-blue-700 hover:text-blue-900 font-semibold whitespace-nowrap">
+          <p className="mt-8 text-sm text-gray-500 text-center">
+            We will never ask for your current password, or for a Mobile Money PIN or card details.
+          </p>
+
+          <p className="mt-6 text-center text-gray-600 text-sm">
+            Remembered it?{' '}
+            <Link href="/auth/login" className="text-gsg-purple hover:text-gsg-purple-dark font-bold hover:underline">
               Sign in
             </Link>
           </p>
         </div>
 
         <div className="mt-8 text-center">
-          <Link href="/" className="text-gray-600 hover:text-gray-900 font-medium whitespace-nowrap">
-            <i className="ri-arrow-left-line mr-2"></i>
+          <Link href="/" className="text-gray-500 hover:text-gsg-black font-medium inline-flex items-center transition-colors">
+            <i className="ri-arrow-left-line mr-2" aria-hidden="true"></i>
             Back to Home
           </Link>
         </div>

@@ -2,12 +2,14 @@
 // row-level security (which still decides which rows a caller sees):
 // - only real public tables, top-level or embedded;
 // - only the RPCs the browser actually calls;
-// - cost prices hidden from everyone but staff;
-// - raw database errors only for staff.
+// - cost prices and internal supplier fields hidden from everyone but staff;
+// - raw database errors only for staff;
+// - the service key over HTTP (GSG AI agent) limited to the tables and
+//   functions that agent uses.
 
 import { PUBLIC_TABLES } from "./fk-map";
 import type { SelectTree } from "./supabase-compat";
-import { isPrivilegedActor, type RlsActor } from "./rls";
+import { isHttpServiceActor, isPrivilegedActor, type RlsActor } from "./rls";
 
 export class PolicyError extends Error {
   status: number;
@@ -27,18 +29,70 @@ export function isAllowedTableName(table: string): boolean {
 }
 
 /** The first embedded table in a select tree that is not allowed, or null. */
-export function findDisallowedTable(tree: SelectTree): string | null {
+export function findDisallowedTable(tree: SelectTree, actor?: RlsActor): string | null {
   for (const e of tree.embeds) {
     if (!isAllowedTableName(e.node.table)) return e.node.table;
-    const nested = findDisallowedTable(e.node);
+    if (actor && !serviceMayRead(actor, e.node.table)) return e.node.table;
+    const nested = findDisallowedTable(e.node, actor);
     if (nested !== null) return nested;
   }
   return null;
 }
 
+// ---- the service key over HTTP (GSG AI WhatsApp agent) ---------------------
+
+/** Tables the agent may read and write with the service key. */
+const SERVICE_HTTP_TABLES = new Set([
+  "orders",
+  "order_items",
+  "order_status_history",
+  "products",
+  "product_variants",
+  "product_images",
+  "categories",
+  "customers",
+  "coupons",
+  "chat_conversations",
+  "ai_memory",
+  "support_knowledge_base",
+]);
+
+/**
+ * Tables the agent may only read. wa_agent_webhook_config holds the URL this
+ * app POSTs payment webhooks (with their secret) to: writable, it would let
+ * the key holder point those requests at internal addresses.
+ */
+const SERVICE_HTTP_READONLY_TABLES = new Set(["wa_agent_webhook_config"]);
+
+/** Functions the agent may call with the service key. */
+const SERVICE_HTTP_RPCS = new Set([
+  "find_user_by_whatsapp_phone",
+  "get_ai_memories",
+  "fuzzy_product_search",
+  "get_order_for_tracking",
+  "mark_order_paid",
+]);
+
+function serviceMayRead(actor: RlsActor, table: string): boolean {
+  if (!isHttpServiceActor(actor)) return true;
+  return SERVICE_HTTP_TABLES.has(table) || SERVICE_HTTP_READONLY_TABLES.has(table);
+}
+
+/**
+ * Whether `actor` may use `table` with this HTTP method. Browsers and staff
+ * are limited by row-level security; only the service key over HTTP is
+ * limited here.
+ */
+export function isTableAllowedFor(actor: RlsActor, table: string, method: string): boolean {
+  if (!isAllowedTableName(table)) return false;
+  if (!isHttpServiceActor(actor)) return true;
+  if (SERVICE_HTTP_TABLES.has(table)) return true;
+  return SERVICE_HTTP_READONLY_TABLES.has(table) && (method === "GET" || method === "HEAD");
+}
+
 // ---- cost prices -----------------------------------------------------------
 
-/** Tables whose rows carry cost prices (products.cost_per_item, product_variants.cost_per_item). */
+/** Tables whose rows carry staff-only columns (cost prices; supplier fields on products). */
 export function isCostTable(table: string): boolean {
   return table === "products" || table === "product_variants";
 }
@@ -46,6 +100,20 @@ export function isCostTable(table: string): boolean {
 /** A cost column name (cost_per_item, or any future cost_* column). */
 export function isCostColumn(col: string): boolean {
   return /^cost(_|$)/i.test(col);
+}
+
+/** Supplier / import fields on products that shoppers must not see. */
+const INTERNAL_PRODUCT_COLUMNS = new Set(["vendor", "external_id", "external_source"]);
+
+/** Whether `col` on `table` is hidden from everyone but staff (and the service role). */
+export function isHiddenColumn(table: string, col: string): boolean {
+  if (isCostTable(table) && isCostColumn(col)) return true;
+  return table === "products" && INTERNAL_PRODUCT_COLUMNS.has(col.toLowerCase());
+}
+
+/** Any staff-only column name, whatever table it is filtered through. */
+function isHiddenColumnName(col: string): boolean {
+  return isCostColumn(col) || INTERNAL_PRODUCT_COLUMNS.has(col.toLowerCase());
 }
 
 /** The column a filter key or order term names: `alias.col->>key` → `col`. */
@@ -66,22 +134,22 @@ const OPTION_KEYS = new Set(["select", "limit", "offset", "on_conflict", "column
  */
 export function assertNoCostFilters(params: URLSearchParams): void {
   const reject = () => {
-    throw new PolicyError("permission denied for column cost_per_item", 403, "42501");
+    throw new PolicyError("permission denied for column", 403, "42501");
   };
   for (const [key, raw] of params.entries()) {
     const last = key.split(".").pop() || key;
     if (OPTION_KEYS.has(last)) continue;
     if (last === "order") {
-      for (const part of raw.split(",")) if (isCostColumn(baseColumn(part.trim().split(".")[0] || ""))) reject();
+      for (const part of raw.split(",")) if (isHiddenColumnName(baseColumn(part.trim().split(".")[0] || ""))) reject();
       continue;
     }
     if (last === "or" || last === "and") {
       // Column names open each term: `(`/`,` then `col.op.value`. Values
       // (e.g. a search for "cost") come after an operator and are not matched.
-      if (/(?:^|[,(])\s*cost(?:_[a-z0-9_]*)?(?:->>?[a-z0-9_]+)*\./i.test(raw)) reject();
+      if (/(?:^|[,(])\s*(?:cost(?:_[a-z0-9_]*)?|vendor|external_id|external_source)(?:->>?[a-z0-9_]+)*\./i.test(raw)) reject();
       continue;
     }
-    if (isCostColumn(baseColumn(key))) reject();
+    if (isHiddenColumnName(baseColumn(key))) reject();
   }
 }
 
@@ -95,7 +163,7 @@ export function stripCostColumns(data: unknown, tree: SelectTree): void {
     }
     const row = value as Record<string, unknown>;
     if (isCostTable(node.table)) {
-      for (const k of Object.keys(row)) if (isCostColumn(k)) delete row[k];
+      for (const k of Object.keys(row)) if (isHiddenColumn(node.table, k)) delete row[k];
     }
     for (const e of node.embeds) visit(row[e.alias], e.node);
   };
@@ -114,7 +182,19 @@ export function treeHasCostTable(tree: SelectTree): boolean {
  * row-level-security denials, constraint violations, and messages raised on
  * purpose by the store's own functions and triggers (RAISE EXCEPTION).
  */
-const PUBLIC_ERROR_CODES = new Set(["42501", "23505", "23503", "23502", "23514", "23P01", "P0001", "21000"]);
+const PUBLIC_ERROR_CODES = new Set(["42501", "P0001", "21000"]);
+
+/**
+ * Constraint violations get a fixed, plain message for non-staff: the
+ * database's own text names constraints and columns.
+ */
+const CONSTRAINT_MESSAGES: Record<string, string> = {
+  "23505": "This record already exists.",
+  "23503": "This refers to something that does not exist.",
+  "23502": "A required field is missing.",
+  "23514": "One of the values is not allowed.",
+  "23P01": "This conflicts with an existing record.",
+};
 
 export interface PostgrestErrorBody {
   message: string;
@@ -138,9 +218,13 @@ export function publicError(
   const message = err.message || "Request failed";
   if (isPrivilegedActor(actor)) return { message, code, details: err.details ?? null, hint: err.hint ?? null };
   if (!code || code.startsWith("PGRST")) return { message, code, details: null, hint: null };
+  if (CONSTRAINT_MESSAGES[code]) return { message: CONSTRAINT_MESSAGES[code], code, details: null, hint: null };
+  if (code === "42501") {
+    // Row-level security / grant denials: a fixed text (the raw one names tables).
+    return { message: "You do not have permission to do this.", code, details: null, hint: null };
+  }
   if (PUBLIC_ERROR_CODES.has(code)) {
-    // Keep RAISE details (written for users); drop key values from
-    // constraint details ("Key (email)=(...) already exists").
+    // RAISE EXCEPTION messages are written for users; keep their details.
     return { message, code, details: code === "P0001" ? err.details ?? null : null, hint: null };
   }
   return { message: "The request could not be completed.", code, details: null, hint: null };
@@ -149,21 +233,21 @@ export function publicError(
 // ---- RPCs ------------------------------------------------------------------
 
 /**
- * RPCs the browser may call: the functions this app's pages call through
- * supabase.rpc() (grep `.rpc(` outside app/api and lib/):
- * - upsert_customer_from_order: POS (app/admin/pos/page.tsx);
- * - mark_order_paid: POS cash/card sales (the function is SECURITY DEFINER;
- *   EXECUTE is granted to the authenticated role only);
- * - is_admin_or_staff: role checks.
- * Everything else (update_customer_stats, mark_shopper_request_paid,
- * get_all_customer_emails/phones, the WhatsApp agent's lookups, trigger
- * functions) is server-only: it runs in-process as the service role, or over
- * HTTP for a caller holding the service key (see resolveActor).
+ * RPCs the browser may call through supabase.rpc(): only is_admin_or_staff
+ * (role checks). The till's mark_order_paid / upsert_customer_from_order
+ * calls moved to the server route /api/admin/pos/checkout; everything else
+ * (update_customer_stats, mark_shopper_request_paid, recompute_*,
+ * get_all_customer_emails/phones, trigger functions) is server-only and runs
+ * in-process as the service role.
  */
-const BROWSER_RPCS = new Set(["upsert_customer_from_order", "mark_order_paid", "is_admin_or_staff"]);
+const BROWSER_RPCS = new Set(["is_admin_or_staff"]);
 
-/** Whether `actor` may call public.<fn> over /rest/v1/rpc. The service role may call any. */
+/**
+ * Whether `actor` may call public.<fn> over /rest/v1/rpc. The service key
+ * over HTTP (GSG AI agent) gets its own short list; in-process server code
+ * never comes through this route.
+ */
 export function isRpcAllowed(fn: string, actor?: RlsActor): boolean {
-  if (actor && actor.kind === "service") return true;
+  if (actor && actor.kind === "service") return actor.via === "http" ? SERVICE_HTTP_RPCS.has(fn) : true;
   return BROWSER_RPCS.has(fn);
 }

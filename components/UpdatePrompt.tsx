@@ -43,9 +43,22 @@ export default function UpdatePrompt() {
     return () => window.removeEventListener('sw-update-available', handleUpdate);
   }, []);
 
+  // The customer chose to update: activate the waiting version, then reload
+  // once it has taken control (or straight away if nothing is waiting).
   const handleUpdate = () => {
-    if (registration?.waiting) {
-      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    const waiting = registration?.waiting;
+    if (waiting && 'serviceWorker' in navigator) {
+      let reloaded = false;
+      const reload = () => {
+        if (reloaded) return;
+        reloaded = true;
+        window.location.reload();
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', reload, { once: true });
+      waiting.postMessage({ type: 'SKIP_WAITING' });
+      // Fallback in case the controller change event never arrives.
+      setTimeout(reload, 4000);
+      return;
     }
     window.location.reload();
   };
@@ -60,20 +73,22 @@ export default function UpdatePrompt() {
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-sm">Update available</p>
-          <p className="text-xs text-gray-400">Tap to get the latest features</p>
+          <p className="text-xs text-gray-400">Finish what you are doing, then tap Update</p>
         </div>
         <button
+          type="button"
           onClick={handleUpdate}
           className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex-shrink-0 active:scale-95"
         >
           Update
         </button>
         <button
+          type="button"
           onClick={() => setShowPrompt(false)}
           className="text-gray-500 hover:text-white p-1 flex-shrink-0"
-          aria-label="Dismiss"
+          aria-label="Dismiss update message"
         >
-          <i className="ri-close-line text-lg" />
+          <i className="ri-close-line text-lg" aria-hidden="true" />
         </button>
       </div>
     </div>

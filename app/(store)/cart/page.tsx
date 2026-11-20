@@ -2,70 +2,62 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { useState } from 'react';
-import CartCountdown from '@/components/CartCountdown';
-import AdvancedCouponSystem from '@/components/AdvancedCouponSystem';
+import { useEffect, useState } from 'react';
 import { useCart } from '@/context/CartContext';
 import PageHero from '@/components/PageHero';
 import { usePageTitle } from '@/hooks/usePageTitle';
 
 export default function CartPage() {
   usePageTitle('Shopping Cart');
-  const { cart: cartItems, removeFromCart, updateQuantity, subtotal, addToCart } = useCart();
-  const [appliedCoupon, setAppliedCoupon] = useState<any>(null);
-  const [savedItems, setSavedItems] = useState<any[]>([]);
+  const { cart: cartItems, removeFromCart, updateQuantity, subtotal, ready, refreshCart } = useCart();
+  const [cartChanges, setCartChanges] = useState<string[]>([]);
+  const [refreshFailed, setRefreshFailed] = useState(false);
 
-  // Function to move item to saved for later (local state only for now)
-  const saveForLater = (id: string) => {
-    const item = cartItems.find(item => item.id === id);
-    if (item) {
-      setSavedItems([...savedItems, item]);
-      removeFromCart(item.id, item.variant); // Use context's removeFromCart
-    }
-  };
+  // Re-read current prices and stock once the saved cart has loaded.
+  useEffect(() => {
+    if (!ready) return;
+    let active = true;
+    refreshCart().then((changes) => {
+      if (!active) return;
+      if (changes === null) setRefreshFailed(true);
+      else if (changes.length > 0) setCartChanges(changes.map((c) => c.message));
+    });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
-  const moveToCart = (id: string) => {
-    const item = savedItems.find(item => item.id === id);
-    if (item) {
-      // addToCart expects a CartItem object which already includes quantity
-      addToCart(item);
-      setSavedItems(savedItems.filter(item => item.id !== id));
-    }
-  };
-
-  const applyCoupon = (coupon: any) => {
-    setAppliedCoupon(coupon);
-  };
-
-  const removeCoupon = () => {
-    setAppliedCoupon(null);
-  };
-
-  // Savings calculation is tricky without originalPrice in Context.
-  // Assuming 0 for now unless we update Context.
-  const savings = 0;
-
-  let couponDiscount = 0;
-  if (appliedCoupon) {
-    if (appliedCoupon.type === 'percentage') {
-      couponDiscount = subtotal * (appliedCoupon.discount / 100);
-    } else {
-      couponDiscount = appliedCoupon.discount;
-    }
-  }
-
-  // Delivery is calculated at checkout from published km formulas — don't invent a flat estimate here.
-  const total = subtotal - couponDiscount;
+  // Same sum as checkout before delivery and coupon: items only.
+  const total = subtotal;
 
   return (
     <div className="min-h-screen bg-gray-50">
       <PageHero title="Shopping Cart" subtitle="Review your items and proceed to checkout" />
       <div className="py-12 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
 
-        <CartCountdown />
-        {/* <FreeShippingBar currentAmount={subtotal} threshold={200} /> */}
+        {cartChanges.length > 0 && (
+          <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" role="status">
+            <p className="font-semibold">Your cart was updated</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-5">
+              {cartChanges.map((msg) => (
+                <li key={msg}>{msg}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {refreshFailed && (
+          <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700" role="status">
+            We could not check the latest prices just now. Checkout will confirm the final price before you pay.
+          </div>
+        )}
 
-        {cartItems.length === 0 && savedItems.length === 0 ? (
+        {!ready ? (
+          <div className="flex justify-center py-24" role="status" aria-live="polite">
+            <i className="ri-loader-4-line animate-spin text-4xl text-gray-400" aria-hidden="true"></i>
+            <span className="sr-only">Loading your cart…</span>
+          </div>
+        ) : cartItems.length === 0 ? (
           <section className="py-20">
             <div className="max-w-2xl mx-auto text-center bg-white rounded-3xl p-12 shadow-sm border border-gray-100">
               <div className="w-24 h-24 flex items-center justify-center mx-auto mb-6 bg-purple-50 rounded-full">
@@ -89,17 +81,16 @@ export default function CartPage() {
                       <i className="ri-shopping-bag-3-line text-gsg-purple"></i>
                       Cart Items ({cartItems.length})
                     </h2>
-                    {savings > 0 && (
-                      <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-bold">
-                        You save GH₵{savings.toFixed(2)}
-                      </span>
-                    )}
                   </div>
 
                   <div className="p-6 space-y-8">
-                    {cartItems.map((item) => (
-                      <div key={`${item.id}-${item.variant || ''}`} className="flex flex-col sm:flex-row gap-6 pb-8 border-b border-gray-100 last:border-0 last:pb-0">
-                        <Link href={`/product/${item.slug || item.id}`} className="relative w-full sm:w-32 h-32 flex-shrink-0 bg-gray-50 rounded-xl overflow-hidden border border-gray-100">
+                    {cartItems.map((item) => {
+                      const minQty = item.moq || 1;
+                      const atMax = item.quantity >= item.maxStock;
+                      const lineTotal = Math.round(item.price * item.quantity * 100) / 100;
+                      return (
+                      <div key={`${item.id}-${item.variantId || item.variant || ''}`} className="flex flex-col sm:flex-row gap-6 pb-8 border-b border-gray-100 last:border-0 last:pb-0">
+                        <Link href={`/product/${item.slug || item.id}`} aria-label={`View ${item.name}`} className="relative w-full sm:w-32 h-32 flex-shrink-0 bg-gray-50 rounded-xl overflow-hidden border border-gray-100">
                           <Image src={item.image} alt={item.name} fill className="object-cover" sizes="(max-width: 640px) 100vw, 128px" quality={80} />
                         </Link>
 
@@ -110,83 +101,77 @@ export default function CartPage() {
                                 {item.name}
                               </Link>
                               <button
-                                onClick={() => removeFromCart(item.id, item.variant)}
+                                type="button"
+                                onClick={() => removeFromCart(item.id, item.variant, item.variantId)}
                                 className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                                aria-label="Remove item"
+                                aria-label={`Remove ${item.name} from cart`}
                               >
-                                <i className="ri-delete-bin-line text-xl"></i>
+                                <i className="ri-delete-bin-line text-xl" aria-hidden="true"></i>
                               </button>
                             </div>
 
                             <div className="text-sm text-gray-500 mb-4 space-y-1">
-                              {item.variant && <p className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-gray-300"></span> Variant: {item.variant}</p>}
-                              <p className="text-green-600 font-medium flex items-center gap-1"><i className="ri-check-line"></i> In Stock</p>
+                              {item.variant && <p className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-gray-300" aria-hidden="true"></span> Variant: {item.variant}</p>}
                             </div>
                           </div>
 
                           <div className="flex items-center justify-between flex-wrap gap-4">
                             <div className="flex items-center border border-gray-200 rounded-lg bg-gray-50">
                               <button
-                                onClick={() => updateQuantity(item.id, item.quantity - 1, item.variant)}
-                                className="w-10 h-10 flex items-center justify-center text-gray-600 hover:bg-white hover:text-gsg-purple rounded-l-lg transition-colors"
-                                disabled={item.quantity <= (item.moq || 1)}
+                                type="button"
+                                onClick={() => updateQuantity(item.id, item.quantity - 1, item.variant, item.variantId)}
+                                className="w-10 h-10 flex items-center justify-center text-gray-600 hover:bg-white hover:text-gsg-purple rounded-l-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                disabled={item.quantity <= minQty}
+                                aria-label={`Decrease quantity of ${item.name}`}
                               >
-                                <i className="ri-subtract-line"></i>
+                                <i className="ri-subtract-line" aria-hidden="true"></i>
                               </button>
                               <input
                                 type="number"
+                                inputMode="numeric"
                                 value={item.quantity}
-                                onChange={(e) => updateQuantity(item.id, parseInt(e.target.value) || (item.moq || 1), item.variant)}
+                                onChange={(e) => {
+                                  const n = parseInt(e.target.value, 10);
+                                  // Typing never removes a line; use the remove button for that.
+                                  updateQuantity(item.id, Number.isFinite(n) ? Math.max(n, minQty) : minQty, item.variant, item.variantId);
+                                }}
                                 className="w-12 h-10 text-center bg-transparent border-x border-gray-200 focus:outline-none font-bold text-gsg-black text-sm"
-                                min={item.moq || 1}
+                                min={minQty}
                                 max={item.maxStock}
+                                aria-label={`Quantity of ${item.name}`}
                               />
                               <button
-                                onClick={() => updateQuantity(item.id, item.quantity + 1, item.variant)}
-                                className="w-10 h-10 flex items-center justify-center text-gray-600 hover:bg-white hover:text-gsg-purple rounded-r-lg transition-colors"
+                                type="button"
+                                onClick={() => updateQuantity(item.id, item.quantity + 1, item.variant, item.variantId)}
+                                disabled={atMax}
+                                className="w-10 h-10 flex items-center justify-center text-gray-600 hover:bg-white hover:text-gsg-purple rounded-r-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                aria-label={`Increase quantity of ${item.name}`}
                               >
-                                <i className="ri-add-line"></i>
+                                <i className="ri-add-line" aria-hidden="true"></i>
                               </button>
                             </div>
 
-                            <span className="text-xl font-bold text-gsg-black">GH₵{item.price.toFixed(2)}</span>
+                            <div className="text-right">
+                              <p className="text-xs text-gray-500">GH₵{item.price.toFixed(2)} × {item.quantity}</p>
+                              <p className="text-xl font-bold text-gsg-black">GH₵{lineTotal.toFixed(2)}</p>
+                            </div>
                           </div>
-                          
-                          {(item.moq || 1) > 1 && (
+
+                          {minQty > 1 && (
                             <p className="text-xs text-orange-500 mt-2 font-medium">
-                              Minimum order: {item.moq} units
+                              Minimum order: {minQty} units
                             </p>
+                          )}
+                          {atMax && (
+                            <p className="text-xs text-amber-600 mt-1 font-medium">Only {item.maxStock} available</p>
                           )}
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 
-                {savedItems.length > 0 && (
-                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                    <h3 className="text-xl font-bold text-gsg-black mb-6">Saved for Later ({savedItems.length})</h3>
-                    <div className="space-y-6">
-                      {savedItems.map((item) => (
-                        <div key={item.id} className="flex gap-4 pb-4 border-b border-gray-100 last:border-0 last:pb-0">
-                          <div className="relative w-20 h-20 flex-shrink-0 bg-gray-50 rounded-lg overflow-hidden border border-gray-100">
-                            <Image src={item.image} alt={item.name} fill className="object-cover" sizes="80px" quality={60} />
-                          </div>
-                          <div className="flex-1">
-                            <p className="font-bold text-gsg-black mb-1 line-clamp-1">{item.name}</p>
-                            <p className="text-gsg-purple font-bold mb-3">GH₵{item.price.toFixed(2)}</p>
-                            <button 
-                              onClick={() => moveToCart(item.id)}
-                              className="text-sm font-bold text-gsg-purple hover:text-gsg-purple-dark hover:underline"
-                            >
-                              Move to Cart
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div className="space-y-6">
@@ -199,16 +184,6 @@ export default function CartPage() {
                       <span className="font-bold text-gsg-black">GH₵{subtotal.toFixed(2)}</span>
                     </div>
 
-                    {appliedCoupon && (
-                      <div className="flex justify-between text-green-600 bg-green-50 p-2 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <i className="ri-coupon-3-fill"></i>
-                          <span>Coupon ({appliedCoupon.code})</span>
-                        </div>
-                        <span className="font-bold">-GH₵{couponDiscount.toFixed(2)}</span>
-                      </div>
-                    )}
-
                     <div className="flex justify-between text-gray-600 gap-4">
                       <span>Delivery</span>
                       <span className="font-bold text-gsg-black text-right text-sm">
@@ -216,7 +191,7 @@ export default function CartPage() {
                       </span>
                     </div>
                     <p className="text-xs text-gray-500 leading-relaxed">
-                      Your delivery total appears after you enter your address at checkout.
+                      Your delivery total appears after you choose a delivery method at checkout. Have a coupon? Enter it at checkout.
                     </p>
                   </div>
 
@@ -227,13 +202,6 @@ export default function CartPage() {
                     </div>
                     <p className="text-xs text-gray-400 mt-1 text-right">Delivery added at checkout</p>
                   </div>
-
-                  <AdvancedCouponSystem
-                    subtotal={subtotal}
-                    onApply={applyCoupon}
-                    onRemove={removeCoupon}
-                    appliedCoupon={appliedCoupon}
-                  />
 
                   <Link
                     href="/checkout"

@@ -5,7 +5,7 @@ import { sendShopperPaymentLink } from '@/lib/notifications';
 import { getDeliverySettings, shopperMarkupAmount } from '@/lib/delivery-settings';
 
 /**
- * Admin-only.
+ * Admin or staff.
  *
  * PATCH /api/shopper/requests/[id]/finalize
  *
@@ -14,7 +14,7 @@ import { getDeliverySettings, shopperMarkupAmount } from '@/lib/delivery-setting
  *     deliveryFee?: number;        // GHS, defaults to whatever is on the row
  *     totalFinal?: number;         // explicit override; otherwise computed
  *     setStatus?: boolean;         // flip status to AWAITING_CONFIRMATION
- *     sendPaymentLink?: boolean;   // email + SMS the customer the pay link
+ *     sendPaymentLink?: boolean;   // SMS the customer the pay link
  *   }
  *
  * If totalFinal is not supplied we compute it from:
@@ -26,9 +26,9 @@ export async function PATCH(
     request: Request,
     context: { params: Promise<{ id: string }> },
 ) {
-    const auth = await verifyAuth(request, { requireAdmin: true });
+    const auth = await verifyAuth(request, { requireRole: ['admin', 'staff'] });
     if (!auth.authenticated) {
-        return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
+        return NextResponse.json({ error: auth.user ? 'Forbidden' : 'Unauthorized' }, { status: auth.user ? 403 : 401 });
     }
 
     const { id } = await context.params;
@@ -55,7 +55,11 @@ export async function PATCH(
     }
 
     if (req0.payment_status === 'paid') {
+        // The difference after market pricing is settled with the customer on WhatsApp.
         return NextResponse.json({ error: 'Request is already paid' }, { status: 400 });
+    }
+    if (req0.status === 'CANCELLED' || req0.status === 'DELIVERED') {
+        return NextResponse.json({ error: 'This request is closed' }, { status: 400 });
     }
 
     // Compute the canonical total from the line items, using market_price when
@@ -92,9 +96,9 @@ export async function PATCH(
         total_final: totalFinal,
         updated_at: new Date().toISOString(),
     };
-    if (setStatus && req0.status !== 'PAID' && req0.status !== 'AWAITING_CONFIRMATION') {
-        update.status = 'AWAITING_CONFIRMATION';
-    } else if (setStatus && req0.status !== 'PAID') {
+    // Only the pricing steps move to AWAITING_CONFIRMATION; a request already
+    // being shopped or delivered keeps its status.
+    if (setStatus && ['SUBMITTED', 'REVIEWING', 'SOURCING'].includes(String(req0.status))) {
         update.status = 'AWAITING_CONFIRMATION';
     }
 
@@ -106,7 +110,7 @@ export async function PATCH(
         .single();
 
     if (updateErr || !updated) {
-        console.error('[shopper/finalize] update failed:', updateErr?.message);
+        console.error('[shopper/finalize] update failed:', updateErr?.code || 'error');
         return NextResponse.json({ error: 'Failed to update request' }, { status: 500 });
     }
 
@@ -117,7 +121,8 @@ export async function PATCH(
                 .insert({
                     request_id: updated.id,
                     status: 'AWAITING_CONFIRMATION',
-                    note: `Total finalized at GH₵${totalFinal.toFixed(2)} by ${auth.user?.email || 'admin'}`,
+                    note: `Total finalised at GH₵${totalFinal.toFixed(2)}`,
+                    created_by: auth.user?.id ?? null,
                 });
         } catch (e: any) {
             console.warn('[shopper/finalize] history insert failed:', e?.message);
@@ -125,16 +130,21 @@ export async function PATCH(
     }
 
     if (wantSendLink) {
+        let sent = false;
         try {
-            await sendShopperPaymentLink(updated);
-        } catch (e: any) {
-            console.error('[shopper/finalize] sendShopperPaymentLink failed:', e?.message);
+            sent = (await sendShopperPaymentLink(updated)).sms;
+        } catch {
+            sent = false;
+        }
+        if (!sent) {
             return NextResponse.json({
                 success: true,
                 request: updated,
-                warning: `Total saved but payment link failed: ${e?.message}`,
+                sms: false,
+                warning: 'Total saved, but the payment link SMS was not sent. Send the link on WhatsApp instead.',
             });
         }
+        return NextResponse.json({ success: true, request: updated, sms: true });
     }
 
     return NextResponse.json({ success: true, request: updated });

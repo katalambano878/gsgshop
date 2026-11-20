@@ -7,7 +7,7 @@ import { absoluteUrl, createPageMetadata, SITE_NAME } from '@/lib/seo';
 export const metadata = createPageMetadata({
   title: 'Shop by Category',
   description:
-    'Explore GSG categories: groceries, household essentials, personal care, stationery, phones, electronics and fashion. Find the right products fast.',
+    'Explore GSG categories: groceries, household essentials, personal care and other everyday convenience goods. Find the right products fast.',
   path: '/categories',
   keywords: ['product categories Ghana', 'grocery categories', 'shop by category Accra'],
 });
@@ -23,9 +23,11 @@ export default async function CategoriesPage() {
       slug,
       description,
       image_url,
-      position
+      position,
+      parent_id
     `)
     .eq('status', 'active')
+    .is('parent_id', null)
     .order('position', { ascending: true });
 
   // Palette to cycle through for visual variety
@@ -42,7 +44,8 @@ export default async function CategoriesPage() {
     const style = palette[i % palette.length];
     return {
       ...c,
-      image: c.image_url || 'https://via.placeholder.com/600x400?text=Category',
+      // Only a real uploaded image; old placeholder-service links are ignored.
+      image: c.image_url && !/placeholder\.com/i.test(c.image_url) ? c.image_url : null,
       color: style.color,
       icon: style.icon,
       bg: style.bg,
@@ -73,11 +76,11 @@ export default async function CategoriesPage() {
     <div className="min-h-screen bg-gray-50">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(collectionSchema) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(collectionSchema).replace(/</g, '\\u003c') }}
       />
       <PageHero
         title="Shop by Category"
-        subtitle="Explore our wide range of premium products"
+        subtitle="Groceries, household essentials and everyday goods"
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
@@ -86,17 +89,23 @@ export default async function CategoriesPage() {
             {categories.map((category) => (
               <Link
                 key={category.id}
-                href={`/shop?category=${category.slug}`}
+                href={`/shop?category=${encodeURIComponent(category.slug)}`}
                 className="group bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border border-gray-100 flex flex-col h-full"
               >
-                <div className="relative h-56 overflow-hidden">
-                  <Image
-                    src={category.image}
-                    alt={category.name}
-                    fill
-                    className="object-cover group-hover:scale-105 transition-transform duration-700"
-                    sizes="(max-width: 768px) 100vw, 33vw"
-                  />
+                <div className={`relative h-56 overflow-hidden ${category.image ? '' : `bg-gradient-to-br ${category.color}`}`}>
+                  {category.image ? (
+                    <Image
+                      src={category.image}
+                      alt=""
+                      fill
+                      className="object-cover group-hover:scale-105 transition-transform duration-700"
+                      sizes="(max-width: 768px) 100vw, 33vw"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center" aria-hidden="true">
+                      <i className={`${category.icon} text-7xl text-white/70`}></i>
+                    </div>
+                  )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-60 group-hover:opacity-40 transition-opacity"></div>
                   <div className="absolute bottom-4 left-4 right-4">
                     <h3 className="text-2xl font-bold text-white mb-1">{category.name}</h3>
@@ -104,17 +113,17 @@ export default async function CategoriesPage() {
                   </div>
                 </div>
                 <div className="p-6 flex-1 flex flex-col">
+ {category.description && (
                   <div className="flex items-start gap-4 mb-4">
-                    <div className={`w-12 h-12 ${category.bg} rounded-xl flex items-center justify-center flex-shrink-0`}>
+                    <div className={`w-12 h-12 ${category.bg} rounded-xl flex items-center justify-center flex-shrink-0`} aria-hidden="true">
                       <i className={`${category.icon} text-2xl ${category.text}`}></i>
                     </div>
-                    <p className="text-gray-600 text-sm leading-relaxed line-clamp-3">
-                      {category.description || 'Discover our exclusive collection of high-quality products in this category. Handpicked for you.'}
-                    </p>
+                    <p className="text-gray-600 text-sm leading-relaxed line-clamp-3">{category.description}</p>
                   </div>
-                  
+                  )}
+
                   <div className="mt-auto pt-4 border-t border-gray-50 flex items-center justify-between text-sm font-bold">
-                    <span className="text-gsg-black group-hover:text-gsg-purple transition-colors">Explore Collection</span>
+                    <span className="text-gsg-black group-hover:text-gsg-purple transition-colors">Shop {category.name}</span>
                     <div className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center group-hover:bg-gsg-purple group-hover:text-white transition-all">
                       <i className="ri-arrow-right-line"></i>
                     </div>
@@ -137,9 +146,9 @@ export default async function CategoriesPage() {
       <div className="bg-gsg-purple py-20 relative overflow-hidden">
         <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(white 1px, transparent 1px)', backgroundSize: '32px 32px' }}></div>
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
-          <h2 className="text-3xl md:text-4xl font-bold text-white mb-6">Can't Find What You're Looking For?</h2>
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-6">Can&apos;t Find What You&apos;re Looking For?</h2>
           <p className="text-lg text-purple-100 mb-10 max-w-2xl mx-auto">
-            Our team is here to help! Try our advanced search or reach out to us directly for personalized assistance.
+            Search all products, or ask us on WhatsApp. Our Personal Shopper service can also buy items we don&apos;t stock.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link

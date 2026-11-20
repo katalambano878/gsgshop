@@ -22,23 +22,26 @@ export async function POST(request: Request) {
     const customerName = String(body?.customer_name ?? '').trim();
 
     if (!items.length) return badRequest('items is required');
+    if (items.length > 50) return badRequest('At most 50 items per order');
     if (!customerPhone) return badRequest('customer_phone is required');
 
     for (const item of items) {
       if (!item?.product_id) return badRequest('Each item must include product_id');
-      if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
+      if (!Number.isInteger(item.quantity) || item.quantity <= 0 || item.quantity > 999) {
         return badRequest('Each item quantity must be a positive integer');
       }
     }
 
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (items.some((i) => !UUID_RE.test(String(i.product_id)))) return badRequest('Each product_id must be a product id');
     const productIds = items.map((i) => i.product_id);
     const { data: products, error: productsError } = await supabaseAdmin
       .from('products')
-      .select('id, name, price, quantity, status')
+      .select('id, name, price, quantity, status, track_quantity, continue_selling')
       .in('id', productIds);
 
     if (productsError) {
-      return NextResponse.json({ error: productsError.message }, { status: 500 });
+      return (console.error('[brain] database error:', productsError.code || 'error'), NextResponse.json({ error: 'Failed to create order' }, { status: 500 }));
     }
 
     const productMap = new Map((products || []).map((p: any) => [p.id, p]));
@@ -51,8 +54,10 @@ export async function POST(request: Request) {
         return badRequest(`Invalid or inactive product: ${item.product_id}`);
       }
 
-      const stock = Number(product.quantity ?? 0);
-      if (stock > 0 && item.quantity > stock) {
+      // Sellable-stock rule: only tracked, no-oversell products are limited.
+      const limited = product.track_quantity !== false && product.continue_selling !== true;
+      const stock = Math.max(0, Number(product.quantity ?? 0));
+      if (limited && item.quantity > stock) {
         return badRequest(`Insufficient stock for product: ${product.name}`);
       }
 
@@ -103,7 +108,7 @@ export async function POST(request: Request) {
       .single();
 
     if (orderError) {
-      return NextResponse.json({ error: orderError.message }, { status: 500 });
+      return (console.error('[brain] database error:', orderError.code || 'error'), NextResponse.json({ error: 'Failed to create order' }, { status: 500 }));
     }
 
     const { error: itemInsertError } = await supabaseAdmin.from('order_items').insert(
@@ -114,7 +119,7 @@ export async function POST(request: Request) {
     );
 
     if (itemInsertError) {
-      return NextResponse.json({ error: itemInsertError.message }, { status: 500 });
+      return (console.error('[brain] database error:', itemInsertError.code || 'error'), NextResponse.json({ error: 'Failed to create order' }, { status: 500 }));
     }
 
     return NextResponse.json({
@@ -130,6 +135,6 @@ export async function POST(request: Request) {
       })),
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to create order' }, { status: 500 });
+    return (console.error('[brain] Failed to create order:', error?.code || error?.name || 'error'), NextResponse.json({ error: 'Failed to create order' }, { status: 500 }));
   }
 }

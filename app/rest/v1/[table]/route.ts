@@ -12,6 +12,7 @@ import {
   rlsDeniedStatus,
   isPrivilegedActor,
   isServiceActor,
+  isStaffActor,
   RlsAuthError,
   type RlsActor,
 } from "@/lib/db/rls";
@@ -23,6 +24,7 @@ import {
   assertNoCostFilters,
   findDisallowedTable,
   isAllowedTableName,
+  isTableAllowedFor,
   publicError,
   stripCostColumns,
   treeHasCostTable,
@@ -31,8 +33,25 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+import { checkRateLimit, getClientIdentifier } from "@/lib/rate-limit";
+
 /** PostgREST's `max-rows` on hosted Supabase: no read returns more rows than this. */
 const MAX_ROWS = 1000;
+/** Rows per parent in a has-many embed (order_items(*), product_variants(*)). */
+const MAX_EMBED_ROWS_PER_PARENT = 500;
+/** Rows in total per has-many embed query. */
+const MAX_EMBED_ROWS_TOTAL = 10000;
+
+/** Request body caps: shoppers, and staff / the service key. */
+const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES_PRIVILEGED = 5 * 1024 * 1024;
+/** Rows one insert/upsert may carry. */
+const MAX_INSERT_ROWS = 50;
+const MAX_INSERT_ROWS_PRIVILEGED = 1000;
+
+/** Per-client-IP request limits for non-staff callers (in memory, per container). */
+const READ_LIMIT = { maxRequests: 300, windowSeconds: 60 };
+const WRITE_LIMIT = { maxRequests: 60, windowSeconds: 60 };
 
 const ANON: RlsActor = { kind: "anon", claims: { role: "anon" } };
 
@@ -87,6 +106,59 @@ function failure(actor: RlsActor, error: { message?: string; code?: string | nul
   return jsonError(body, denied ?? 400, actor);
 }
 
+/**
+ * The JSON body, refused when larger than the caller's cap. Reads the stream
+ * itself, so a missing or false Content-Length cannot get past the cap.
+ */
+async function readJsonBody(
+  req: NextRequest,
+  actor: RlsActor
+): Promise<{ ok: true; body: unknown } | { ok: false; res: NextResponse }> {
+  const cap = isPrivilegedActor(actor) ? MAX_BODY_BYTES_PRIVILEGED : MAX_BODY_BYTES;
+  const tooLarge = () => ({
+    ok: false as const,
+    res: jsonError({ message: "Request body is too large", code: "PGRST413" }, 413, actor),
+  });
+  const declared = Number(req.headers.get("content-length") || 0);
+  if (declared > cap) return tooLarge();
+  const reader = req.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (reader) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > cap) {
+        await reader.cancel().catch(() => {});
+        return tooLarge();
+      }
+      chunks.push(value);
+    }
+  }
+  const text = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+  try {
+    return { ok: true, body: text ? JSON.parse(text) : null };
+  } catch {
+    return { ok: true, body: null };
+  }
+}
+
+/** 429 for non-staff callers over the per-IP limit; null otherwise. */
+function rateLimited(req: NextRequest, actor: RlsActor): NextResponse | null {
+  if (isPrivilegedActor(actor)) return null;
+  const write = req.method !== "GET" && req.method !== "HEAD";
+  const res = checkRateLimit(
+    `rest-${write ? "write" : "read"}:${getClientIdentifier(req)}`,
+    write ? WRITE_LIMIT : READ_LIMIT
+  );
+  if (res.success) return null;
+  return NextResponse.json(
+    { message: "Too many requests. Please wait a minute and try again.", code: "PGRST429", details: null, hint: null },
+    { status: 429, headers: { ...corsHeaders(), "Retry-After": String(res.resetIn || 60) } }
+  );
+}
+
 /** What a request reads, and whether cost prices must be hidden from it. */
 interface Scope {
   table: string;
@@ -125,9 +197,18 @@ async function guard(
   const actor = await actorOrError(req);
   if (actor instanceof NextResponse) return actor;
 
-  // Staff and the service key (GSG AI agent) see everything RLS allows;
-  // everyone else gets cost columns hidden and cannot filter on them.
-  const staff = isPrivilegedActor(actor);
+  // The service key over HTTP (GSG AI agent) is limited to its own tables.
+  if (!isTableAllowedFor(actor, table, req.method) || findDisallowedTable(tree, actor) !== null) {
+    return jsonError({ message: "permission denied for table", code: "42501" }, 403, actor);
+  }
+
+  const limited = rateLimited(req, actor);
+  if (limited) return limited;
+
+  // Staff see everything RLS allows. Everyone else, the agent included (it
+  // talks to customers), gets cost prices and supplier fields hidden and
+  // cannot filter or sort on them.
+  const staff = isStaffActor(actor);
   if (!staff) {
     try {
       assertNoCostFilters(req.nextUrl.searchParams);
@@ -154,7 +235,8 @@ function visibleRows(data: any, scope: Scope): any {
 
 /**
  * PATCH/DELETE without any row filter would touch every row the policy
- * allows. Like Supabase's safeupdate guard, refuse it for everyone but staff.
+ * allows. Like Supabase's safeupdate guard, refuse it for everyone but staff
+ * (and the service key).
  */
 function requireFilter(scope: Scope, hasFilters: boolean, verb: "UPDATE" | "DELETE"): NextResponse | null {
   if (hasFilters || isPrivilegedActor(scope.actor)) return null;
@@ -206,6 +288,10 @@ export async function GET(
   // Hosted PostgREST never returned more than 1000 rows per request; pages
   // that need more ask for them with .range().
   qb.capRows(MAX_ROWS);
+  qb.capEmbedRows(MAX_EMBED_ROWS_PER_PARENT, MAX_EMBED_ROWS_TOTAL);
+  // The Meta / WhatsApp integration row is staff-only (row-level security
+  // too); never hand it to anyone else, even if a policy is loosened.
+  if (table === "site_settings" && !isStaffActor(actor)) qb.neq("key", "meta_integration");
 
   const result = await withRls(actor, async () => await qb);
   if (result.error) return failure(actor, result.error, "Query failed");
@@ -246,8 +332,20 @@ export async function POST(
   if (scope instanceof NextResponse) return scope;
   const { table, actor } = scope;
 
-  const body = await req.json().catch(() => null);
+  const read = await readJsonBody(req, actor);
+  if (!read.ok) return read.res;
+  const body = read.body as Record<string, unknown> | Record<string, unknown>[] | null;
   if (body == null || typeof body !== "object") return jsonError({ message: "Invalid JSON body", code: "PGRST102" }, 400, actor);
+  const maxRows = isPrivilegedActor(actor) ? MAX_INSERT_ROWS_PRIVILEGED : MAX_INSERT_ROWS;
+  if (Array.isArray(body)) {
+    if (body.length === 0) return jsonError({ message: "Empty insert", code: "PGRST102" }, 400, actor);
+    if (body.length > maxRows) {
+      return jsonError({ message: `At most ${maxRows} rows per request`, code: "PGRST413" }, 413, actor);
+    }
+    if (body.some((r) => r == null || typeof r !== "object" || Array.isArray(r))) {
+      return jsonError({ message: "Invalid JSON body", code: "PGRST102" }, 400, actor);
+    }
+  }
 
   const client = createClient();
   // supabase-js .upsert() posts with Prefer: resolution=merge-duplicates and
@@ -261,6 +359,7 @@ export async function POST(
     qb = qb.select(req.nextUrl.searchParams.get("select") || "*") as typeof qb;
   }
   if (preferSingle(req)) qb = qb.single() as typeof qb;
+  qb.capEmbedRows(MAX_EMBED_ROWS_PER_PARENT, MAX_EMBED_ROWS_TOTAL);
 
   const result = await withRls(actor, async () => await qb);
   if (result.error) return failure(actor, result.error, "Insert failed");
@@ -279,13 +378,15 @@ export async function PATCH(
   if (scope instanceof NextResponse) return scope;
   const { table, actor } = scope;
 
-  const body = await req.json().catch(() => null);
-  if (body == null || typeof body !== "object" || Array.isArray(body)) {
+  const read = await readJsonBody(req, actor);
+  if (!read.ok) return read.res;
+  const body = read.body;
+  if (body == null || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length === 0) {
     return jsonError({ message: "Invalid JSON body", code: "PGRST102" }, 400, actor);
   }
 
   const client = createClient();
-  let qb = client.from(table).update(body);
+  let qb = client.from(table).update(body as Record<string, unknown>);
   const filters = withoutOptions(req.nextUrl.searchParams);
   try {
     applyPostgrestParams(qb as any, filters);

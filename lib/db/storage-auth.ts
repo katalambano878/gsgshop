@@ -8,7 +8,9 @@ const STAFF_WRITABLE_BUCKETS = new Set(["products"]);
 
 async function canWrite(actor: RlsActor, bucket: string): Promise<boolean> {
   if (!STAFF_WRITABLE_BUCKETS.has(bucket)) return false;
-  if (actor.kind === "service") return true;
+  // In-process server code only. The service key over HTTP (GSG AI agent)
+  // is scoped to its tables and functions and cannot write files.
+  if (actor.kind === "service") return actor.via !== "http";
   if (actor.kind !== "authenticated") return false;
   const { rows } = await withRls(actor, () =>
     query<{ ok: boolean }>("SELECT public.is_admin_or_staff() AS ok")

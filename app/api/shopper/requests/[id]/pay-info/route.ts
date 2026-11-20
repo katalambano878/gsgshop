@@ -1,62 +1,77 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { checkRateLimit, getClientIdentifier } from '@/lib/rate-limit';
+import { maskEmail } from '@/lib/payment-target';
+import { findRequest, SR_RE, UUID_RE, viewerFor } from '../../../_lib';
+
+export const dynamic = 'force-dynamic';
 
 /**
- * Public read for the shopper pay page.
+ * GET /api/shopper/requests/[id]/pay-info?phone=…
  *
- * GET /api/shopper/requests/[id]/pay-info
+ * [id] is the row uuid or the SR- number. Proof: the phone used on the
+ * request (last 9 digits), or a signed-in owner / staff token. A uuid link
+ * (/pay/<uuid>, sent by SMS to the customer) also counts as proof: the uuid
+ * is unguessable and only ever given to the customer.
  *
- * Returns just the bits the pay page needs to render:
- *   request_number, total_final, payment_status, status,
- *   contact_email, contact_name, items (name + final price)
- *
- * No PII beyond what the customer already entered.
+ * 200 → { id, request_number, status, payment_status, total_final, total_est,
+ *         markup, delivery_fee, contact_name (first name), contact_email (masked),
+ *         contact_email_masked, items: [{ id, name_brand, qty_size_range, price }] }
+ * 400 without proof · 404 unknown or wrong phone.
  */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SELECT_COLUMNS =
-    'id, request_number, total_final, total_est, markup, delivery_fee, payment_status, status, contact_email, contact_name, items:shopper_request_items(id, name_brand, qty_size_range, market_price, estimated_price)';
+export async function GET(req: Request, context: { params: Promise<{ id: string }> }) {
+    const rl = checkRateLimit(`shopper-payinfo:${getClientIdentifier(req)}`, { maxRequests: 30, windowSeconds: 60 });
+    if (!rl.success) return NextResponse.json({ error: 'Too many requests. Please wait a minute.' }, { status: 429 });
 
-export async function GET(
-    _req: Request,
-    context: { params: Promise<{ id: string }> },
-) {
     const { id } = await context.params;
-    if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
-
-    // We accept either a UUID (the row's primary key, used in /pay/[id]) OR an
-    // SR-... request_number (echoed back in the gateway redirect URL).
-    // We cannot use .or() with both filters at once because PostgREST will try
-    // to cast the SR-... value to uuid for the id.eq.<...> comparison and 500.
-    const filterColumn = UUID_RE.test(id) ? 'id' : 'request_number';
-
-    const { data, error } = await supabaseAdmin
-        .from('shopper_requests')
-        .select(SELECT_COLUMNS)
-        .eq(filterColumn, id)
-        .maybeSingle();
-
-    if (error || !data) {
+    const key = decodeURIComponent(id || '').trim();
+    if (!UUID_RE.test(key) && !SR_RE.test(key)) {
         return NextResponse.json({ error: 'Request not found' }, { status: 404 });
     }
+    const phone = new URL(req.url).searchParams.get('phone');
+    const byUuid = UUID_RE.test(key);
+    if (!byUuid && !phone && !req.headers.get('authorization')) {
+        return NextResponse.json({ error: 'Enter the phone number used on this request.' }, { status: 400 });
+    }
 
-    return NextResponse.json({
-        id: data.id,
-        request_number: data.request_number,
-        status: data.status,
-        payment_status: data.payment_status,
-        total_final: data.total_final !== null ? Number(data.total_final) : null,
-        total_est: data.total_est !== null ? Number(data.total_est) : null,
-        markup: Number(data.markup ?? 0),
-        delivery_fee: Number(data.delivery_fee ?? 0),
-        contact_email: data.contact_email,
-        contact_name: data.contact_name,
-        items: (data.items || []).map((it: any) => ({
-            id: it.id,
-            name_brand: it.name_brand,
-            qty_size_range: it.qty_size_range,
-            price: it.market_price !== null && it.market_price !== undefined
-                ? Number(it.market_price)
-                : Number(it.estimated_price),
-        })),
-    });
+    const row = await findRequest(key);
+    if (!row) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+    if (!byUuid) {
+        const viewer = await viewerFor(req, row, phone);
+        if (viewer.kind === 'none') return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+    }
+
+    const { data: items } = await supabaseAdmin
+        .from('shopper_request_items')
+        .select('id, name_brand, qty_size_range, market_price, estimated_price, created_at')
+        .eq('request_id', row.id)
+        .order('created_at', { ascending: true });
+
+    const masked = maskEmail(row.contact_email);
+    return NextResponse.json(
+        {
+            id: row.id,
+            request_number: row.request_number,
+            status: row.status,
+            payment_status: row.payment_status,
+            total_final: row.total_final !== null && row.total_final !== undefined ? Number(row.total_final) : null,
+            total_est: row.total_est !== null && row.total_est !== undefined ? Number(row.total_est) : null,
+            markup: Number(row.markup ?? 0),
+            delivery_fee: Number(row.delivery_fee ?? 0),
+            contact_name: String(row.contact_name || '').split(' ')[0] || null,
+            contact_email: masked,
+            contact_email_masked: masked,
+            has_email: !!row.contact_email,
+            items: (items || []).map((it: any) => ({
+                id: it.id,
+                name_brand: it.name_brand,
+                qty_size_range: it.qty_size_range,
+                price:
+                    it.market_price !== null && it.market_price !== undefined
+                        ? Number(it.market_price)
+                        : Number(it.estimated_price),
+            })),
+        },
+        { headers: { 'Cache-Control': 'no-store' } },
+    );
 }

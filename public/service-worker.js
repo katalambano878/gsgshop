@@ -1,5 +1,8 @@
-// GSG Convenience Goods & More - Service Worker v2.1
-const CACHE_VERSION = 'sl-v2.1';
+// GSG Convenience Goods & More - Service Worker v2.2
+// v2.2: never caches personal data (data API, auth, private storage, API
+// routes other than /api/storefront, account/checkout/payment pages); a new
+// version waits until the customer taps "Update" instead of reloading pages.
+const CACHE_VERSION = 'sl-v2.2';
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `dynamic-${CACHE_VERSION}`;
 const IMAGE_CACHE = `images-${CACHE_VERSION}`;
@@ -11,7 +14,6 @@ const STATIC_ASSETS = [
   '/shop',
   '/cart',
   '/wishlist',
-  '/account',
   '/categories',
   '/offline',
   '/fgfg.png',
@@ -45,9 +47,30 @@ self.addEventListener('install', (event) => {
           return Promise.resolve();
         });
       })
-      .then(() => self.skipWaiting())
   );
+  // No skipWaiting() here: the new version takes over only when the customer
+  // accepts the update prompt, so a page (e.g. checkout) is never reloaded
+  // under them.
 });
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// Paths whose responses can hold personal or payment data: never cached.
+function isPrivatePath(pathname) {
+  if (pathname.startsWith('/rest/v1') || pathname.startsWith('/auth/v1')) return true;
+  // Storage: only public object downloads may be cached, never uploads or signed URLs.
+  if (pathname.startsWith('/storage/v1') && !pathname.startsWith('/storage/v1/object/public/')) return true;
+  if (pathname.startsWith('/api/') && !pathname.startsWith('/api/storefront/')) return true;
+  return false;
+}
+
+// Pages that show one customer's details: always from the network.
+const NO_CACHE_PAGES = ['/account', '/auth', '/checkout', '/pay', '/order-success', '/order-tracking', '/returns', '/support', '/admin', '/shopper'];
+function isPrivatePage(pathname) {
+  return NO_CACHE_PAGES.some((p) => pathname === p || pathname.startsWith(p + '/'));
+}
 
 // Activate: clean old caches
 self.addEventListener('activate', (event) => {
@@ -79,18 +102,20 @@ self.addEventListener('fetch', (event) => {
   // Skip chrome-extension, ws, and other non-http
   if (!url.protocol.startsWith('http')) return;
 
-  // Skip API routes that modify data
-  if (url.pathname.startsWith('/api/payment')) return;
-  if (url.pathname.startsWith('/api/notifications')) return;
+  // Only this site's own requests are handled (fonts/CDN below excepted).
+  const sameOrigin = url.origin === self.location.origin;
 
-  // Skip admin routes
-  if (url.pathname.startsWith('/admin')) return;
+  // Personal data, auth and non-storefront API routes: straight to the network.
+  if (sameOrigin && isPrivatePath(url.pathname)) return;
+
+  // Admin and other private pages: straight to the network.
+  if (sameOrigin && isPrivatePage(url.pathname)) return;
 
   // Strategy: Images - Cache First (long-lived)
   if (
     request.destination === 'image' ||
     url.pathname.match(/\.(png|jpg|jpeg|gif|webp|svg|ico)$/) ||
-    url.hostname.includes('supabase.co') && url.pathname.includes('/storage/')
+    url.pathname.startsWith('/storage/v1/object/public/')
   ) {
     event.respondWith(
       caches.open(IMAGE_CACHE).then((cache) => {
@@ -115,8 +140,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Strategy: Storefront API - Network First with cache fallback (short TTL)
-  if (url.pathname.startsWith('/api/storefront')) {
+  // Strategy: Storefront API (public catalogue) - Network First with cache fallback
+  if (sameOrigin && url.pathname.startsWith('/api/storefront/')) {
     event.respondWith(
       fetch(request)
         .then((response) => {
@@ -185,20 +210,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Default: Network First
-  event.respondWith(
-    fetch(request)
-      .then((response) => {
-        if (response.ok) {
-          const responseClone = response.clone();
-          caches.open(DYNAMIC_CACHE).then((cache) => {
-            cache.put(request, responseClone);
-          });
-        }
-        return response;
-      })
-      .catch(() => caches.match(request))
-  );
+  // Everything else: network only (nothing else is stored).
 });
 
 // Background sync for offline actions

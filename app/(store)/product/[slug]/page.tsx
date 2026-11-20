@@ -1,5 +1,8 @@
 import { Metadata } from 'next';
+import { notFound } from 'next/navigation';
 import { createServerSupabase } from '@/lib/supabase-server';
+import { isPurchasable } from '@/context/stock';
+import { PRODUCT_DETAIL_COLUMNS, UUID_RE, jsonLd } from './product-query';
 import { absoluteMediaUrl } from '@/lib/media-url';
 import ProductDetailClient from './ProductDetailClient';
 import {
@@ -24,26 +27,19 @@ function resolveCategory(categories: { name: string; slug: string } | { name: st
 
 // Same shape ProductDetailClient fetches, so the server can hand the product
 // over and the first HTML Google receives already shows name, price and photos.
+// Returns null when no active product has this slug; throws when the
+// database cannot be read (so an outage is a 500, not a "not found").
 async function fetchProduct(slug: string) {
-  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slug);
+  let query = supabase.from('products').select(PRODUCT_DETAIL_COLUMNS).eq('status', 'active');
 
-  let query = supabase
-    .from('products')
-    .select(`
-      *,
-      categories(name, slug),
-      product_variants(*),
-      product_images(url, position, alt_text)
-    `)
-    .eq('status', 'active');
-
-  if (isUUID) {
+  if (UUID_RE.test(slug)) {
     query = query.or(`id.eq.${slug},slug.eq.${slug}`);
   } else {
     query = query.eq('slug', slug);
   }
 
-  const { data } = await query.single();
+  const { data, error } = await query.limit(1).maybeSingle();
+  if (error) throw new Error(`Product lookup failed: ${error.message || error}`);
   return data;
 }
 
@@ -102,7 +98,7 @@ export default async function ProductDetailPage({ params }: Props) {
   const product = await fetchProduct(slug);
 
   if (!product) {
-    return <ProductDetailClient slug={slug} />;
+    notFound();
   }
 
   const images = sortedImageUrls(product);
@@ -111,10 +107,7 @@ export default async function ProductDetailPage({ params }: Props) {
   const minVariantPrice = hasVariants
     ? Math.min(...variants.map((v) => v.price || product.price))
     : product.price;
-  const totalVariantStock = hasVariants
-    ? variants.reduce((sum, v) => sum + (v.quantity || 0), 0)
-    : 0;
-  const effectiveStock = hasVariants ? totalVariantStock : product.quantity;
+  const purchasable = isPurchasable(product, variants);
   const category = resolveCategory(product.categories);
   const categoryName = category.name || 'Shop';
   const categorySlug = category.slug || 'shop';
@@ -135,9 +128,9 @@ export default async function ProductDetailPage({ params }: Props) {
     currency: 'GHS',
     sku: product.sku || product.id,
     slug: productSlug,
-    rating: product.rating_avg || undefined,
+    rating: product.review_count > 0 ? product.rating_avg || undefined : undefined,
     reviewCount: product.review_count || undefined,
-    availability: effectiveStock > 0 || product.continue_selling ? 'in_stock' : 'out_of_stock',
+    availability: purchasable ? 'in_stock' : 'out_of_stock',
     brand: product.brand || undefined,
     category: categoryName,
   });
@@ -153,11 +146,11 @@ export default async function ProductDetailPage({ params }: Props) {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(productSchema) }}
+        dangerouslySetInnerHTML={{ __html: jsonLd(productSchema) }}
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+        dangerouslySetInnerHTML={{ __html: jsonLd(breadcrumbSchema) }}
       />
       <ProductDetailClient slug={slug} initialProduct={product} />
     </>

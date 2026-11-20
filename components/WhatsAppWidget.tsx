@@ -31,7 +31,7 @@ const HIDDEN_PREFIXES = [
 export default function WhatsAppWidget({
   phone = DEFAULT_PHONE,
   agentName = 'GSG Support',
-  agentStatus = 'Typically replies within minutes',
+  agentStatus = 'Replies during opening hours',
   greeting = "Hi there! 👋\n\nWelcome to GSG. How can we help you today?",
   prefilledMessage = "Hi GSG! I'd like some help.",
 }: WhatsAppWidgetProps) {

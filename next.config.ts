@@ -76,9 +76,11 @@ const nextConfig: NextConfig = {
           { key: 'Content-Type', value: 'application/manifest+json' }
         ]
       },
-      // Cache storefront API routes aggressively (5 min CDN, revalidate in background)
+      // Cache the public catalogue API (15 min CDN, revalidate in background).
+      // Only products and categories: other /api/storefront routes (order
+      // tracking, returns, contact, newsletter) answer per customer.
       {
-        source: '/api/storefront/:path*',
+        source: '/api/storefront/:path(products|categories)',
         headers: [
           { key: 'Cache-Control', value: 'public, s-maxage=900, stale-while-revalidate=1800' }
         ]

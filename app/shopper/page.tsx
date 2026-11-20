@@ -1,7 +1,10 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import ShopperMarkup from '@/components/ShopperMarkup';
+import { REFUND_NOTE } from './_lib/copy';
 
-const STEPS = [
+const STEPS: Array<{ step: string; title: string; text: ReactNode; image: string }> = [
   {
     step: '01',
     title: 'Create your list',
@@ -10,14 +13,19 @@ const STEPS = [
   },
   {
     step: '02',
-    title: 'We source for you',
-    text: 'We buy at the exact source price with a transparent 15% or less Markup — no hidden fees on top. Our professional shoppers confirm the quality and totals before purchasing.',
+    title: 'Pay the estimate',
+    text: (
+      <>
+        We work out your estimate from your list: item prices, a <ShopperMarkup /> markup on the item subtotal and the
+        delivery fee for your distance. You pay it up front by Mobile Money or card.
+      </>
+    ),
     image: '/shopper/shopper_image_9.webp',
   },
   {
     step: '03',
-    title: 'Pay & receive',
-    text: 'Confirm your final totals, pay securely, and get delivery straight to your preferred location. We provide real-time updates via WhatsApp every step of the way.',
+    title: 'We shop & deliver',
+    text: 'Our shoppers buy your items at the market price and deliver to your chosen location. If the market prices differ from the estimate, our staff settle the difference with you on WhatsApp.',
     image: '/shopper/shopper_image_4.webp',
   },
 ];
@@ -41,70 +49,33 @@ const SOURCE_CATEGORIES = [
     examples: ['Pharmacy items', 'First-aid', 'Emergency'],
     image: '/shopper/shopper_image_1.webp',
   },
-  {
-    name: 'Building Materials',
-    desc: 'Construction and renovation supplies sourced and delivered to site.',
-    examples: ['Cement & blocks', 'Tools', 'Finishing'],
-    image: '/shopper/shopper_image_6.webp',
-  },
 ];
 
-const STATS = [
-  { value: '5', unit: '%', label: 'Markup or less on every order' },
-  { value: '24', unit: '/7', label: 'WhatsApp support, real humans' },
-  { value: '100', unit: '%', label: 'Source-price guaranteed, always' },
-  { value: 'Same', unit: '-day', label: 'Delivery for lists placed before 11am' },
+const STATS: Array<{ value: ReactNode; unit: string; label: string }> = [
+  { value: <ShopperMarkup fallback="—" />, unit: '', label: 'Markup on the item subtotal, from our live settings' },
+  { value: 'Daily', unit: '', label: 'Sole and Joint Express delivery in Accra' },
+  { value: '2–48', unit: 'hr', label: 'Delivery slots to choose from' },
+  { value: 'MoMo', unit: '+ card', label: 'Mobile Money or card, paid up front' },
 ];
 
-const REVIEWS = [
-  {
-    name: 'Akosua M.',
-    role: 'Busy mum, East Legon',
-    avatar: '/shopper/shopper_image_10.webp',
-    rating: 5,
-    quote:
-      'I sent my Sunday market list at 7am and had everything by lunch. The receipt matched exactly. Game changer.',
-    featured: true,
-    image: '/shopper/shopper_image_8.webp',
-  },
-  {
-    name: 'Naa D.',
-    role: 'Restaurant owner',
-    avatar: '/shopper/shopper_image_3.webp',
-    rating: 5,
-    quote:
-      'My personal shopper does my produce run twice a week. It saves me a whole afternoon.',
-  },
-  {
-    name: 'Kwame S.',
-    role: 'Site engineer',
-    avatar: '/shopper/shopper_image_6.webp',
-    rating: 5,
-    quote:
-      'Got tools and PPE delivered straight to site. Zero markup, very transparent.',
-  },
-  {
-    name: 'Ama K.',
-    role: 'Working professional',
-    avatar: '/shopper/shopper_image_7.webp',
-    rating: 5,
-    quote:
-      'Everything came in beautiful packaging. They even called to confirm a brand swap. So thoughtful.',
-  },
-];
-
-const FAQS = [
+const FAQS: Array<{ q: string; a: ReactNode }> = [
   {
     q: 'How is the price calculated?',
-    a: 'You pay the market source price for each item, plus a 15% or less Markup on the subtotal, plus a delivery fee based on distance. We confirm totals before you pay.',
+    a: (
+      <>
+        You pay the market price for each item, plus a <ShopperMarkup /> markup on the item subtotal, plus a delivery
+        fee based on distance. You pay the estimate when you send your list; if the market prices differ, our staff
+        settle the difference with you on WhatsApp.
+      </>
+    ),
   },
   {
     q: 'What if an item is unavailable?',
-    a: 'We message you on WhatsApp with the closest substitute or refund that line item. Nothing is bought without your nod.',
+    a: `We message you on WhatsApp with the closest substitute, or we drop that item and refund it. ${REFUND_NOTE}`,
   },
   {
     q: 'How fast is delivery?',
-    a: 'Lists placed before 11am are typically delivered same-day in Accra. Out-of-Accra and bulk runs are scheduled in advance.',
+    a: 'Sole and Joint Express run daily in Accra, in 2-hour to 48-hour slots. Outside Greater Accra we drop your items at an Accra transport station and the onward fare is extra.',
   },
 ];
 
@@ -140,7 +111,7 @@ export default function ShopperHome() {
             </h1>
 
             <p className="text-xl md:text-2xl mb-10 text-white/90 font-light leading-relaxed max-w-xl">
-              Quality, fresh, hard-to-find — delivered <strong className="font-semibold text-white">at the exact source price</strong>. Time and money saved.
+              Quality, fresh, hard-to-find — bought <strong className="font-semibold text-white">at the market price</strong> and delivered to your door in Accra. Time saved.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 mb-12">
@@ -164,11 +135,11 @@ export default function ShopperHome() {
             <div className="flex flex-wrap gap-x-8 gap-y-3 text-sm text-white/80 font-medium">
               <div className="flex items-center gap-2">
                 <i className="ri-shield-check-fill text-xl text-green-400" />
-                <span>Source-price guarantee</span>
+                <span>Market price on the goods</span>
               </div>
               <div className="flex items-center gap-2">
-                <i className="ri-percent-fill text-xl text-green-400" />
-                <span>15% or less Markup</span>
+                <i className="ri-percent-fill text-xl text-green-400" aria-hidden="true" />
+                <span><ShopperMarkup fallback="Clear" /> markup, shown before you pay</span>
               </div>
             </div>
           </div>
@@ -251,18 +222,18 @@ export default function ShopperHome() {
                 Anything on your list.<br />Anywhere in the city.
               </h2>
               <p className="text-xl text-gray-600">
-                Four broad categories, one trusted service. If it's for sale, we'll find it.
+                Three broad categories, one trusted service. Tell us what you need and we'll look for it.
               </p>
             </div>
             <Link
               href="/shopper/how-it-works"
               className="shrink-0 inline-flex items-center gap-2 text-gsg-purple font-bold hover:underline text-lg"
             >
-              See our full catalogue <i className="ri-arrow-right-line" />
+              See how it works <i className="ri-arrow-right-line" aria-hidden="true" />
             </Link>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-6 lg:gap-8">
+          <div className="grid md:grid-cols-3 gap-6 lg:gap-8">
             {SOURCE_CATEGORIES.map((category) => (
               <div
                 key={category.name}
@@ -273,7 +244,7 @@ export default function ShopperHome() {
                   alt={category.name}
                   fill
                   className="object-cover group-hover:scale-105 transition-transform duration-700"
-                  sizes="(max-width: 768px) 100vw, 50vw"
+                  sizes="(max-width: 768px) 100vw, 33vw"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
                 <div className="absolute inset-0 p-8 flex flex-col justify-end">
@@ -326,11 +297,11 @@ export default function ShopperHome() {
         <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-12 max-w-3xl mx-auto">
             <span className="inline-block text-xs md:text-sm font-bold tracking-[0.2em] text-gsg-accent mb-3">
-              BY THE NUMBERS
+              AT A GLANCE
             </span>
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight">
-              A service built on{' '}
-              <span className="text-gsg-accent">trust.</span>
+              Clear prices,{' '}
+              <span className="text-gsg-accent">no guesswork.</span>
             </h2>
           </div>
 
@@ -354,114 +325,6 @@ export default function ShopperHome() {
                   {s.label}
                 </p>
               </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ============================================================
-          IN THEIR WORDS — Featured testimonial + grid
-          ============================================================ */}
-      <section className="py-24 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-12 md:mb-16">
-          <div className="text-center max-w-3xl mx-auto">
-            <span className="inline-block text-sm font-bold tracking-[0.2em] text-gsg-purple mb-3">
-              IN THEIR WORDS
-            </span>
-            <h2 className="text-4xl md:text-5xl font-bold text-gsg-black tracking-tight mb-4">
-              People who got their{' '}
-              <span className="relative inline-block">
-                <span className="relative z-10">time back.</span>
-                <span className="absolute -bottom-1 left-0 right-0 h-3 bg-gsg-accent/40 rounded-full -z-0" />
-              </span>
-            </h2>
-            <p className="text-lg text-gray-600">
-              Real lists. Real receipts. Real reviews from busy people across
-              Accra.
-            </p>
-          </div>
-        </div>
-
-        {/* Featured large testimonial */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-8">
-          {(() => {
-            const featured = REVIEWS.find((r) => r.featured)!;
-            return (
-              <div className="relative rounded-[2.5rem] overflow-hidden shadow-2xl min-h-[420px] md:min-h-[480px]">
-                <Image
-                  src={featured.image!}
-                  alt={featured.name}
-                  fill
-                  className="object-cover"
-                  sizes="(max-width: 1024px) 100vw, 80vw"
-                />
-                <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/55 to-black/20 lg:from-black/85 lg:via-black/50 lg:to-transparent" />
-
-                <div className="relative z-10 flex flex-col justify-center max-w-2xl p-8 md:p-14 lg:p-16 min-h-[420px] md:min-h-[480px]">
-                  <i className="ri-double-quotes-l text-5xl md:text-7xl text-gsg-accent mb-5 md:mb-7" />
-                  <blockquote className="text-2xl md:text-4xl font-bold text-white leading-tight mb-8 md:mb-10">
-                    &ldquo;{featured.quote}&rdquo;
-                  </blockquote>
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-full overflow-hidden relative ring-2 ring-white/30 shrink-0">
-                      <Image
-                        src={featured.avatar}
-                        alt={featured.name}
-                        fill
-                        className="object-cover"
-                      />
-                    </div>
-                    <div className="text-white">
-                      <p className="font-bold text-base md:text-lg">
-                        {featured.name}
-                      </p>
-                      <p className="text-sm text-white/80">{featured.role}</p>
-                    </div>
-                    <div className="hidden sm:flex ml-auto gap-1 text-gsg-accent">
-                      {[...Array(featured.rating)].map((_, i) => (
-                        <i key={i} className="ri-star-fill text-lg" />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-        </div>
-
-        {/* Smaller reviews grid */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-3 gap-5 lg:gap-6">
-            {REVIEWS.filter((r) => !r.featured).map((r) => (
-              <figure
-                key={r.name}
-                className="bg-gray-50 rounded-2xl p-6 md:p-7 border border-gray-100 hover:border-gsg-purple/30 hover:shadow-lg transition-all"
-              >
-                <div className="flex gap-1 text-gsg-accent mb-4">
-                  {[...Array(r.rating)].map((_, i) => (
-                    <i key={i} className="ri-star-fill text-base" />
-                  ))}
-                </div>
-                <blockquote className="text-gray-800 text-base leading-relaxed mb-6 font-medium">
-                  &ldquo;{r.quote}&rdquo;
-                </blockquote>
-                <figcaption className="flex items-center gap-3 pt-4 border-t border-gray-200/70">
-                  <div className="w-10 h-10 rounded-full overflow-hidden relative shrink-0">
-                    <Image
-                      src={r.avatar}
-                      alt={r.name}
-                      fill
-                      className="object-cover"
-                    />
-                  </div>
-                  <div>
-                    <p className="font-bold text-gsg-black text-sm">
-                      {r.name}
-                    </p>
-                    <p className="text-xs text-gray-500">{r.role}</p>
-                  </div>
-                </figcaption>
-              </figure>
             ))}
           </div>
         </div>

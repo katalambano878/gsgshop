@@ -1,12 +1,116 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { shopperUrl } from '@/lib/site-urls';
+import { getShopperBaseUrl, goodsUrl, shopperUrl } from '@/lib/site-urls';
+import {
+  CONTACT_EMAIL,
+  PHONE_PRIMARY_DISPLAY,
+  PHONE_PRIMARY_TEL,
+  PHONE_SECONDARY_DISPLAY,
+  PHONE_SECONDARY_TEL,
+  TELEGRAM_URL,
+  WHATSAPP_URL,
+} from '@/components/legal/business-facts';
 
-const SUPPORT_PHONES = ['+233 (0) 246 033 792', '+233 (0) 579 033 792'];
-const TELEGRAM = 'https://t.me/gsgbrandsgh';
-const SOCIAL_HANDLE = '@gsgbrandsgh';
+const SUPPORT_PHONES = [
+  { display: PHONE_PRIMARY_DISPLAY, tel: PHONE_PRIMARY_TEL },
+  { display: PHONE_SECONDARY_DISPLAY, tel: PHONE_SECONDARY_TEL },
+];
+
+/** True when the page is served from the Personal Shopper host. */
+function useOnShopperHost(): boolean {
+  const [onShopper, setOnShopper] = useState(false);
+  useEffect(() => {
+    const host = window.location.hostname;
+    let shopperHost = '';
+    try {
+      shopperHost = new URL(getShopperBaseUrl()).hostname;
+    } catch {
+      /* ignore */
+    }
+    setOnShopper(host === shopperHost || host.startsWith('shopper.'));
+  }, []);
+  return onShopper;
+}
+
+/**
+ * A link to a goods-storefront page. On the shopper host those paths do not
+ * exist, so the link goes to the goods host instead.
+ */
+function GoodsLink({ path, onShopper, className, children }: { path: string; onShopper: boolean; className?: string; children: React.ReactNode }) {
+  if (onShopper) {
+    return <a href={goodsUrl(path)} className={className}>{children}</a>;
+  }
+  return <Link href={path} className={className}>{children}</Link>;
+}
+
+function NewsletterForm() {
+  const [email, setEmail] = useState('');
+  const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+  const [message, setMessage] = useState('');
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = email.trim();
+    if (!/\S+@\S+\.\S+/.test(value)) {
+      setState('error');
+      setMessage('Please enter a valid email address.');
+      return;
+    }
+    setState('sending');
+    setMessage('');
+    try {
+      const res = await fetch('/api/storefront/newsletter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: value, source: 'footer' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setState('error');
+        setMessage(data.error || data.message || 'We could not add your email. Please try again.');
+        return;
+      }
+      setState('done');
+      setMessage('Thank you, your email has been added to our list.');
+      setEmail('');
+    } catch {
+      setState('error');
+      setMessage('Network error. Please try again.');
+    }
+  };
+
+  return (
+    <>
+      <form className="flex gap-2" onSubmit={onSubmit} noValidate>
+        <label htmlFor="footer-newsletter-email" className="sr-only">Email address</label>
+        <input
+          id="footer-newsletter-email"
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Enter your email"
+          className="flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-gsg-purple focus:ring-1 focus:ring-gsg-purple transition-all"
+        />
+        <button
+          type="submit"
+          disabled={state === 'sending'}
+          className="bg-gsg-purple text-white px-6 py-3 rounded-lg text-sm font-bold hover:bg-gsg-purple-dark transition-colors disabled:opacity-60"
+        >
+          {state === 'sending' ? 'Joining…' : 'Join'}
+        </button>
+      </form>
+      {message && (
+        <p role={state === 'error' ? 'alert' : 'status'} className={`mt-2 text-sm ${state === 'error' ? 'text-red-300' : 'text-green-300'}`}>
+          {message}
+        </p>
+      )}
+    </>
+  );
+}
 
 const BUSINESS_UNITS = [
   { name: 'Convenience Goods & More', icon: 'ri-shopping-cart-2-line' },
@@ -19,15 +123,16 @@ const BUSINESS_UNITS = [
 
 export default function GSGFooter() {
   const currentYear = new Date().getFullYear();
+  const onShopper = useOnShopperHost();
 
   return (
-    <footer className="bg-gsg-black text-white pt-16 pb-8 border-t border-gray-800">
+    <footer className="bg-gsg-black text-white pt-16 pb-8 border-t border-gray-800 print:hidden">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Top Section */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 mb-16">
           {/* Brand */}
           <div className="lg:col-span-4">
-            <Link href="/" className="inline-block mb-6">
+            <GoodsLink path="/" onShopper={onShopper} className="inline-block mb-6">
               <div className="flex items-center">
                 <div className="flex flex-col">
                   <div className="relative w-[82px] h-[28px]">
@@ -36,35 +141,27 @@ export default function GSGFooter() {
                   <span className="text-xs font-medium text-gray-400 uppercase tracking-wider leading-none">Convenience Goods & More</span>
                 </div>
               </div>
-            </Link>
+            </GoodsLink>
             <p className="text-gray-400 text-sm leading-relaxed mb-6 max-w-sm">
-              Premium, trustworthy convenience shopping in Ghana. We bring quality goods right to your doorstep with modern e-commerce reliability.
+              Groceries, household goods and everyday essentials from Accra. Pickup or delivery in and around the city, paid online by Mobile Money or card.
             </p>
             <div className="flex gap-4 mb-6">
-              <a href={TELEGRAM} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-gsg-purple hover:scale-110 transition-all duration-300" aria-label="Telegram">
-                <i className="ri-telegram-fill text-xl" />
+              <a href={TELEGRAM_URL} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-gsg-purple hover:scale-110 transition-all duration-300" aria-label="GSG on Telegram">
+                <i className="ri-telegram-fill text-xl" aria-hidden="true" />
               </a>
-              <span className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white/50 cursor-default" title="@gsgbrandsgh">
-                <i className="ri-instagram-line text-xl" />
-              </span>
-              <span className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white/50 cursor-default" title="@gsgbrandsgh">
-                <i className="ri-twitter-x-line text-xl" />
-              </span>
-              <span className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white/50 cursor-default" title="@gsgbrandsgh">
-                <i className="ri-facebook-fill text-xl" />
-              </span>
+              <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-gsg-purple hover:scale-110 transition-all duration-300" aria-label="GSG on WhatsApp">
+                <i className="ri-whatsapp-line text-xl" aria-hidden="true" />
+              </a>
             </div>
-            <p className="text-xs text-gray-500">Social: <span className="text-gray-400 font-medium">{SOCIAL_HANDLE}</span></p>
           </div>
 
           {/* Shop Links */}
           <div className="lg:col-span-2">
             <h3 className="font-bold text-lg text-white mb-6">Shop</h3>
             <ul className="space-y-4 text-sm text-gray-400">
-              <li><Link href="/shop" className="hover:text-gsg-accent transition-colors">All Products</Link></li>
-              <li><Link href="/categories" className="hover:text-gsg-accent transition-colors">Categories</Link></li>
-              <li><Link href="/shipping#sole-express" className="hover:text-gsg-accent transition-colors">Sole Express</Link></li>
-              <li><Link href="/gift-card" className="hover:text-gsg-accent transition-colors">Gift Cards</Link></li>
+              <li><GoodsLink path="/shop" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">All Products</GoodsLink></li>
+              <li><GoodsLink path="/categories" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">Categories</GoodsLink></li>
+              <li><GoodsLink path="/shipping#sole-express" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">Sole Express</GoodsLink></li>
               <li><a href={shopperUrl('/')} className="hover:text-gsg-accent transition-colors">Personal Shopper</a></li>
             </ul>
           </div>
@@ -73,37 +170,26 @@ export default function GSGFooter() {
           <div className="lg:col-span-2">
             <h3 className="font-bold text-lg text-white mb-6">Support</h3>
             <ul className="space-y-4 text-sm text-gray-400">
-              <li><Link href="/order-tracking" className="hover:text-gsg-accent transition-colors">Track Order</Link></li>
-              <li><Link href="/account" className="hover:text-gsg-accent transition-colors">My Account</Link></li>
-              <li><Link href="/help" className="hover:text-gsg-accent transition-colors">Help Center</Link></li>
-              <li><Link href="/shipping" className="hover:text-gsg-accent transition-colors">Shipping & Delivery</Link></li>
-              <li><Link href="/contact" className="hover:text-gsg-accent transition-colors">Contact Us</Link></li>
+              <li><GoodsLink path="/order-tracking" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">Track Order</GoodsLink></li>
+              <li><GoodsLink path="/account" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">My Account</GoodsLink></li>
+              <li><GoodsLink path="/help" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">Help Center</GoodsLink></li>
+              <li><GoodsLink path="/shipping" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">Shipping & Delivery</GoodsLink></li>
+              <li><GoodsLink path="/returns" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">Returns</GoodsLink></li>
+              <li><GoodsLink path="/contact" onShopper={onShopper} className="hover:text-gsg-accent transition-colors">Contact Us</GoodsLink></li>
             </ul>
           </div>
 
           {/* Newsletter + Payment */}
           <div className="lg:col-span-4">
             <h3 className="font-bold text-lg text-white mb-6">Stay Updated</h3>
-            <p className="text-gray-400 text-sm mb-4">Subscribe to get special offers, free giveaways, and once-in-a-lifetime deals.</p>
-            <form className="flex gap-2" onSubmit={(e) => e.preventDefault()}>
-              <input
-                type="email"
-                placeholder="Enter your email"
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-gsg-purple focus:ring-1 focus:ring-gsg-purple transition-all"
-              />
-              <button
-                type="submit"
-                className="bg-gsg-purple text-white px-6 py-3 rounded-lg text-sm font-bold hover:bg-gsg-purple-dark transition-colors"
-              >
-                Join
-              </button>
-            </form>
+            <p className="text-gray-400 text-sm mb-4">Leave your email to hear about new products and offers.</p>
+            <NewsletterForm />
             <div className="mt-6">
               <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">We Accept</p>
               <div className="flex gap-3 opacity-70 grayscale hover:grayscale-0 transition-all duration-500">
-                <div className="h-8 w-12 bg-white rounded flex items-center justify-center"><i className="ri-visa-line text-2xl text-blue-900" /></div>
-                <div className="h-8 w-12 bg-white rounded flex items-center justify-center"><i className="ri-mastercard-fill text-2xl text-red-600" /></div>
-                <div className="h-8 w-12 bg-white rounded flex items-center justify-center font-bold text-xs text-black">MOMO</div>
+                <div className="h-8 w-12 bg-white rounded flex items-center justify-center" title="Visa"><i className="ri-visa-line text-2xl text-blue-900" aria-hidden="true" /><span className="sr-only">Visa</span></div>
+                <div className="h-8 w-12 bg-white rounded flex items-center justify-center" title="Mastercard"><i className="ri-mastercard-fill text-2xl text-red-600" aria-hidden="true" /><span className="sr-only">Mastercard</span></div>
+                <div className="h-8 w-12 bg-white rounded flex items-center justify-center font-bold text-xs text-black" title="Mobile Money">MOMO</div>
               </div>
             </div>
           </div>
@@ -129,14 +215,14 @@ export default function GSGFooter() {
         <div className="border-t border-white/10 pt-8 mb-8">
           <div className="flex flex-wrap gap-6 text-sm text-gray-400">
             {SUPPORT_PHONES.map((phone) => (
-              <a key={phone} href={`tel:${phone.replace(/[\s()]/g, '')}`} className="inline-flex items-center gap-2 hover:text-white transition-colors">
-                <i className="ri-phone-line text-gsg-purple"></i> {phone}
+              <a key={phone.tel} href={`tel:${phone.tel}`} className="inline-flex items-center gap-2 hover:text-white transition-colors">
+                <i className="ri-phone-line text-gsg-purple" aria-hidden="true"></i> {phone.display}
               </a>
             ))}
-            <a href="mailto:info@gsgbrands.com.gh" className="inline-flex items-center gap-2 hover:text-white transition-colors">
-              <i className="ri-mail-line text-gsg-purple"></i> info@gsgbrands.com.gh
+            <a href={`mailto:${CONTACT_EMAIL}`} className="inline-flex items-center gap-2 hover:text-white transition-colors">
+              <i className="ri-mail-line text-gsg-purple" aria-hidden="true"></i> {CONTACT_EMAIL}
             </a>
-            <a href={`https://wa.me/233246033792`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 hover:text-white transition-colors">
+            <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 hover:text-white transition-colors">
               <i className="ri-whatsapp-line text-gsg-purple"></i> WhatsApp
             </a>
           </div>
@@ -148,9 +234,9 @@ export default function GSGFooter() {
             &copy; {currentYear} GSG Convenience Goods & More. All rights reserved.
           </p>
           <div className="flex gap-6 text-sm text-gray-500">
-            <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
-            <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
-            <Link href="/cookies" className="hover:text-white transition-colors">Cookie Settings</Link>
+            <GoodsLink path="/privacy" onShopper={onShopper} className="hover:text-white transition-colors">Privacy Policy</GoodsLink>
+            <GoodsLink path="/terms" onShopper={onShopper} className="hover:text-white transition-colors">Terms of Service</GoodsLink>
+            <GoodsLink path="/cookies" onShopper={onShopper} className="hover:text-white transition-colors">Cookie Policy</GoodsLink>
           </div>
         </div>
       </div>

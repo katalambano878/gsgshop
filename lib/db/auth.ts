@@ -4,11 +4,52 @@ import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { randomUUID } from "crypto";
 import { getSharedPool, query } from "./pool";
-import { authJwtSecret } from "./mode";
+import { authJwtSecret, sessionClaimsValid, AUTH_JWT_AUDIENCE, AUTH_JWT_ISSUER } from "./mode";
 
 const ACCESS_TTL_SEC = 60 * 60; // matches the Supabase project's jwt_exp
 const REFRESH_TTL_SEC = 60 * 60 * 24 * 30; // 30 days
 const BCRYPT_ROUNDS = 10;
+
+/** Shortest password accepted anywhere (sign-up, password change). */
+export const MIN_PASSWORD_LENGTH = 8;
+/** bcrypt only uses the first 72 bytes; refuse longer so nothing is silently ignored. */
+const MAX_PASSWORD_BYTES = 72;
+/** A password change without the current password needs a sign-in this recent. */
+const REAUTH_WINDOW_SEC = 15 * 60;
+/** A session opened from a password-reset link may change the password for this long. */
+const RECOVERY_WINDOW_SEC = 60 * 60;
+
+/**
+ * A plausible email address: one @, a local part and a dotted domain with a
+ * 2+ letter top level, no spaces or control characters, RFC length limits.
+ * (Proof of ownership is impossible here: the store sends no email.)
+ */
+export function isValidEmail(raw: string): boolean {
+  const email = raw.trim();
+  if (email.length < 6 || email.length > 254) return false;
+  const at = email.lastIndexOf("@");
+  if (at < 1 || at !== email.indexOf("@")) return false;
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  if (local.length > 64) return false;
+  if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local)) return false;
+  if (local.startsWith(".") || local.endsWith(".") || local.includes("..")) return false;
+  const labels = domain.split(".");
+  if (labels.length < 2) return false;
+  if (!labels.every((l) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(l))) return false;
+  return /^[A-Za-z]{2,}$/.test(labels[labels.length - 1]);
+}
+
+/** Why a new password is refused, or null when it is acceptable. */
+export function passwordProblem(password: string): AuthFailure | null {
+  if (!password || password.length < MIN_PASSWORD_LENGTH) {
+    return fail(`Password should be at least ${MIN_PASSWORD_LENGTH} characters.`, "weak_password", 422);
+  }
+  if (Buffer.byteLength(password, "utf8") > MAX_PASSWORD_BYTES) {
+    return fail("Password is too long (72 characters at most).", "weak_password", 422);
+  }
+  return null;
+}
 
 const BASE_USER_COLUMNS = `id, email, phone, encrypted_password, email_confirmed_at,
   phone_confirmed_at, last_sign_in_at, raw_app_meta_data, raw_user_meta_data,
@@ -212,7 +253,7 @@ async function mintSession(
   const amr: AmrEntry[] = auth.amr?.length ? auth.amr : [{ method: auth.method, timestamp: now }];
 
   const access_token = await new SignJWT({
-    aud: "authenticated",
+    aud: AUTH_JWT_AUDIENCE,
     role: "authenticated",
     email: user.email,
     phone: user.phone,
@@ -224,6 +265,7 @@ async function mintSession(
     sv,
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuer(AUTH_JWT_ISSUER)
     .setSubject(user.id)
     .setIssuedAt(now)
     .setExpirationTime(now + ACCESS_TTL_SEC)
@@ -236,6 +278,7 @@ async function mintSession(
     sv,
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuer(AUTH_JWT_ISSUER)
     .setSubject(user.id)
     .setIssuedAt(now)
     .setExpirationTime(now + REFRESH_TTL_SEC)
@@ -256,13 +299,11 @@ export async function verifyAccessToken(
 ): Promise<{ userId: string; payload: Record<string, any> } | null> {
   try {
     const { payload } = await jwtVerify(token, secretKey(), { algorithms: ["HS256"] });
-    if (payload.typ === "refresh") return null;
     // Only session tokens minted by signInWithPassword/refresh: never the
-    // anon or service_role keys, and never a token without an expiry.
-    if (payload.role !== "authenticated" || typeof payload.exp !== "number") return null;
-    const userId = typeof payload.sub === "string" ? payload.sub : null;
-    if (!userId) return null;
-    return { userId, payload: payload as Record<string, any> };
+    // anon or service_role keys, never a refresh token, never a token
+    // without an expiry or for another audience/issuer.
+    if (!sessionClaimsValid(payload as Record<string, unknown>)) return null;
+    return { userId: payload.sub as string, payload: payload as Record<string, any> };
   } catch {
     return null;
   }
@@ -287,6 +328,31 @@ export async function getUserForToken(token: string): Promise<AuthUser | null> {
   if (!row || isBanned(row)) return null;
   if (tokenVersion(verified.payload) < rowVersion(row)) return null;
   return rowToUser(row, await loadAppRole(row.id));
+}
+
+/**
+ * Whether this access token's sign-in is fresh enough to change the password
+ * without the current one: a password sign-in in the last 15 minutes, or a
+ * session opened from a password-reset link (within an hour). A refresh
+ * keeps the original sign-in time, so refreshing does not renew it.
+ */
+export function canChangePasswordWith(payload: Record<string, any>): boolean {
+  const amr = parseAmr(payload.amr);
+  if (!amr) return false;
+  const now = Math.floor(Date.now() / 1000);
+  return amr.some((a) =>
+    a.method === "recovery" ? now - a.timestamp <= RECOVERY_WINDOW_SEC : now - a.timestamp <= REAUTH_WINDOW_SEC
+  );
+}
+
+/** Whether `password` is the account's current password (spends one bcrypt check either way). */
+export async function verifyCurrentPassword(userId: string, password: string): Promise<boolean> {
+  const row = await userRowById(userId);
+  if (!row?.encrypted_password || !password) {
+    await burnPasswordCheck(password || "x");
+    return false;
+  }
+  return bcrypt.compare(password, row.encrypted_password).catch(() => false);
 }
 
 /** Sign out everywhere (supabase-js `signOut()`, default scope "global"). */
@@ -334,11 +400,40 @@ export async function signInWithPassword(
 }
 
 /**
- * GoTrue sign-up with "Confirm email" off: the account is created confirmed
- * and signed in at once (the sign-up page then goes straight to /account).
- * An address that already has an account gets GoTrue's 422
- * `user_already_exists`, and the existing password is never touched. Both
- * branches spend one bcrypt hash, so response time does not differ.
+ * What sign-up answers for an address that already has an account: a
+ * user-shaped object that matches nothing real (random id, no metadata), so
+ * the form cannot be used to find out who has an account.
+ */
+function decoyUser(email: string): AuthUser {
+  const now = new Date().toISOString();
+  return {
+    id: randomUUID(),
+    aud: "authenticated",
+    role: "authenticated",
+    email,
+    phone: "",
+    email_confirmed_at: null,
+    phone_confirmed_at: null,
+    confirmed_at: null,
+    last_sign_in_at: null,
+    app_metadata: { provider: "email", providers: ["email"] },
+    user_metadata: {},
+    identities: [],
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+/**
+ * Sign-up. The store sends no email, so new accounts are confirmed at once.
+ * The answer is the same whether or not the address already has an account
+ * (GoTrue's behaviour with "Confirm email" on): 200 with a user object and
+ * NO session. A new account is created with this password; an existing
+ * account is left untouched (its password is never changed) and a decoy user
+ * is returned. The sign-up page then signs in with the same email and
+ * password: that works for the new account, and fails with the ordinary
+ * "invalid credentials" for someone else's address. Every branch spends one
+ * bcrypt hash, so response time does not tell either.
  */
 export async function signUpWithPassword(opts: {
   email: string;
@@ -349,26 +444,23 @@ export async function signUpWithPassword(opts: {
   if (!email || !opts.password) {
     return { user: null, session: null, error: fail("Email and password are required", "validation_failed") };
   }
-  if (!email.includes("@")) {
+  if (!isValidEmail(email)) {
     return {
       user: null,
       session: null,
       error: fail("Unable to validate email address: invalid format", "validation_failed"),
     };
   }
-  if (opts.password.length < 6) {
-    return {
-      user: null,
-      session: null,
-      error: fail("Password should be at least 6 characters.", "weak_password", 422),
-    };
-  }
+  const weak = passwordProblem(opts.password);
+  if (weak) return { user: null, session: null, error: weak };
 
   const prior = await userRowByEmail(email);
   if (prior) {
     await hashPassword(opts.password);
-    return { user: null, session: null, error: fail("User already registered", "user_already_exists", 422) };
+    return { user: decoyUser(email), session: null, error: null };
   }
+
+  const data = cleanMetadata(opts.data);
 
   // handle_new_user (AFTER INSERT trigger) creates the matching profiles row.
   let inserted: Record<string, any>;
@@ -377,31 +469,28 @@ export async function signUpWithPassword(opts: {
       `INSERT INTO auth.users (
          id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
          confirmation_token, raw_app_meta_data, raw_user_meta_data,
-         created_at, updated_at, last_sign_in_at, recovery_token, email_change_token_new, email_change
+         created_at, updated_at, recovery_token, email_change_token_new, email_change
        ) VALUES (
          $1, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
          $2, $3, now(), '', '{"provider":"email","providers":["email"]}'::jsonb, $4::jsonb,
-         now(), now(), now(), '', '', ''
+         now(), now(), '', '', ''
        ) RETURNING ${await userColumns()}`,
-      [randomUUID(), email, await hashPassword(opts.password), JSON.stringify(opts.data || {})]
+      [randomUUID(), email, await hashPassword(opts.password), JSON.stringify(data)]
     );
     inserted = rows[0];
   } catch (e: any) {
-    // Two sign-ups for one address at once: the loser sees the unique index.
-    if (e?.code === "23505") {
-      return { user: null, session: null, error: fail("User already registered", "user_already_exists", 422) };
-    }
+    // Two sign-ups for one address at once: the loser gets the decoy too.
+    if (e?.code === "23505") return { user: decoyUser(email), session: null, error: null };
     throw e;
   }
   await query(
     `INSERT INTO auth.identities (id, provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
-     VALUES (gen_random_uuid(), $1::text, $1, jsonb_build_object('sub', $1::text, 'email', $2::text,
+     VALUES (gen_random_uuid(), $1::text, $1::uuid, jsonb_build_object('sub', $1::text, 'email', $2::text,
              'email_verified', false, 'phone_verified', false), 'email', now(), now(), now())`,
     [inserted.id, email]
   ).catch((e) => console.error("[auth] identity insert failed:", e.message));
 
-  const session = await mintSession(inserted, { method: "password" });
-  return { user: session.user, session, error: null };
+  return { user: rowToUser(inserted), session: null, error: null };
 }
 
 export async function refreshSession(
@@ -412,10 +501,12 @@ export async function refreshSession(
     const { payload } = await jwtVerify(refreshToken, secretKey(), { algorithms: ["HS256"] });
     if (payload.typ !== "refresh" || typeof payload.sub !== "string") return invalid;
     if (typeof payload.exp !== "number") return invalid;
+    // Refresh tokens minted from now on carry this app's issuer; older ones none.
+    if (payload.iss !== undefined && payload.iss !== AUTH_JWT_ISSUER) return invalid;
     const row = await userRowById(payload.sub);
     if (!row) return invalid;
     if (isBanned(row)) return { session: null, error: fail("User is banned", "user_banned") };
-    // Signed out everywhere since: revoked.
+    // Signed out everywhere, password changed or banned since: revoked.
     if (tokenVersion(payload as Record<string, any>) < rowVersion(row)) return invalid;
     return {
       session: await mintSession(row, {
@@ -431,28 +522,57 @@ export async function refreshSession(
 }
 
 /**
- * Set a new password (supabase-js `updateUser({ password })` from a signed-in
- * session), as Supabase does with "Secure password change" off: no recent
- * sign-in is required and the caller's session keeps working.
+ * Set a new password. The caller has already proved it is them (current
+ * password, recent sign-in or reset link: see the PUT /auth/v1/user route).
+ * Every session of the account ends (other devices, stolen tokens), and a
+ * fresh session is returned for the caller so this device stays signed in.
  */
 export async function updateUserPassword(
   userId: string,
   password: string
-): Promise<{ user: AuthUser | null; error: AuthFailure | null }> {
-  if (!password || password.length < 6) {
-    return { user: null, error: fail("Password should be at least 6 characters.", "weak_password", 422) };
-  }
-  await query(
-    `UPDATE auth.users SET encrypted_password = $1, updated_at = now() WHERE id = $2`,
+): Promise<{ user: AuthUser | null; session: SessionTokens | null; error: AuthFailure | null }> {
+  const weak = passwordProblem(password);
+  if (weak) return { user: null, session: null, error: weak };
+  const withVersion = await hasSessionVersion();
+  const { rows } = await query(
+    `UPDATE auth.users
+        SET encrypted_password = $1,
+            ${withVersion ? "session_version = session_version + 1," : ""}
+            updated_at = now()
+      WHERE id = $2 AND deleted_at IS NULL
+      RETURNING ${await userColumns()}`,
     [await hashPassword(password), userId]
   );
-  return { user: await getUserById(userId), error: null };
+  if (!withVersion) {
+    console.warn("[auth] auth.users.session_version is missing: other sessions survive this password change");
+  }
+  const row = rows[0];
+  if (!row) return { user: null, session: null, error: fail("User not found", "user_not_found", 404) };
+  const session = await mintSession(row, { method: "password" });
+  return { user: session.user, session, error: null };
+}
+
+/**
+ * user_metadata as the pages send it (first_name, last_name, phone, ...):
+ * plain values only, at most 30 keys, strings cut to 500 characters. Roles
+ * never come from here (profiles.role decides).
+ */
+function cleanMetadata(input: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!input || typeof input !== "object" || Array.isArray(input)) return out;
+  for (const [k, v] of Object.entries(input as Record<string, unknown>).slice(0, 30)) {
+    if (!/^[a-z0-9_]{1,64}$/i.test(k)) continue;
+    if (typeof v === "string") out[k] = v.slice(0, 500);
+    else if (typeof v === "boolean" || typeof v === "number" || v === null) out[k] = v;
+  }
+  return out;
 }
 
 export async function updateUserMetadata(
   userId: string,
   data: Record<string, unknown>
 ): Promise<{ user: AuthUser | null; error: AuthFailure | null }> {
+  data = cleanMetadata(data);
   await query(
     `UPDATE auth.users
      SET raw_user_meta_data = COALESCE(raw_user_meta_data, '{}'::jsonb) || $1::jsonb,

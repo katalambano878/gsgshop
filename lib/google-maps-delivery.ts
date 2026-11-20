@@ -1,4 +1,10 @@
-import type { LatLng } from '@/lib/delivery-hub';
+import {
+  estimateRoadKm,
+  haversineKm,
+  isOutsideGreaterAccra,
+  type DeliveryHub,
+  type LatLng,
+} from '@/lib/delivery-hub';
 
 /**
  * Optional Google Geocoding + Distance Matrix.
@@ -233,4 +239,79 @@ export async function googleDrivingKm(origin: LatLng, dest: LatLng): Promise<num
     (await drivingKmViaDistanceMatrix(origin, dest, key)) ??
     (await drivingKmViaRoutes(origin, dest, key))
   );
+}
+
+// ---------------------------------------------------------------------------
+// Server-side delivery distance (used by /api/delivery/distance, /api/checkout
+// and /api/shopper/requests, so the km charged is always worked out here).
+// ---------------------------------------------------------------------------
+
+/** Public OSRM road distance (fallback when Google is not configured). */
+export async function osrmDrivingKm(origin: LatLng, dest: LatLng): Promise<number | null> {
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${dest.lng},${dest.lat}?overview=false`;
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      next: { revalidate: 0 },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return metersToKm(Number(data?.routes?.[0]?.distance));
+  } catch {
+    return null;
+  }
+}
+
+/** Road km: Google (when keyed), then OSRM; null when neither answers. */
+export async function routedKm(origin: LatLng, dest: LatLng): Promise<number | null> {
+  return (await googleDrivingKm(origin, dest)) ?? (await osrmDrivingKm(origin, dest));
+}
+
+/** True when a point is a plausible delivery pin in or near Ghana. */
+export function isGhanaPin(lat: unknown, lng: unknown): boolean {
+  const la = Number(lat);
+  const ln = Number(lng);
+  return Number.isFinite(la) && Number.isFinite(ln) && la >= 4 && la <= 12 && ln >= -4 && ln <= 2;
+}
+
+// Hub -> transport station barely changes; route it once per process.
+let stationKmCache: { key: string; km: number } | null = null;
+
+export async function hubToStationKm(hub: LatLng, station: LatLng): Promise<number> {
+  const key = `${hub.lat},${hub.lng}>${station.lat},${station.lng}`;
+  if (stationKmCache?.key === key) return stationKmCache.km;
+  const km = (await routedKm(hub, station)) ?? estimateRoadKm(haversineKm(hub, station));
+  stationKmCache = { key, km };
+  return km;
+}
+
+export type PinDistance = {
+  /** km the delivery fee is charged on (hub -> pin, or hub -> station outside Greater Accra). */
+  km: number;
+  /** hub -> pin km. */
+  destinationKm: number;
+  outsideGreaterAccra: boolean;
+  method: 'road' | 'estimated';
+};
+
+/**
+ * The chargeable delivery km for a map pin, worked out on the server the same
+ * way /api/delivery/distance quotes it. Outside Greater Accra the fee covers
+ * the hub -> transport station leg only. `region` (from a geocoder) is
+ * optional; without it the Greater Accra box decides.
+ */
+export async function deliveryKmForPin(
+  point: LatLng,
+  hub: DeliveryHub,
+  station: DeliveryHub,
+  region?: string | null,
+): Promise<PinDistance> {
+  const routed = await routedKm(hub, point);
+  const destinationKm = routed ?? estimateRoadKm(haversineKm(hub, point));
+  const method = routed != null ? 'road' : 'estimated';
+  if (isOutsideGreaterAccra(region ?? null, point)) {
+    return { km: await hubToStationKm(hub, station), destinationKm, outsideGreaterAccra: true, method };
+  }
+  return { km: destinationKm, destinationKm, outsideGreaterAccra: false, method };
 }

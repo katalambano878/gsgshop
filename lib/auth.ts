@@ -25,9 +25,9 @@ export interface AuthResult {
 }
 
 export interface VerifyAuthOptions {
-    /** Anyone who can open the dashboard: admin or staff. */
+    /** Administrators only (not staff). For "admin or staff" use requireRole: ['admin', 'staff']. */
     requireAdmin?: boolean;
-    /** With requireAdmin: admin or staff (same as requireAdmin here; this store has no POS-only role). */
+    /** Admin or staff (anyone who can open the dashboard). Ignored when requireAdmin is set. */
     requireFullStaff?: boolean;
     /**
      * Exact role check, and the clear way to say who may call a route:
@@ -41,11 +41,12 @@ export interface VerifyAuthOptions {
 /** The roles a set of options lets in, or null when no role check was asked for. */
 function allowedRoles(options: VerifyAuthOptions): UserRole[] | null {
     if (options.requireRole) {
-        return Array.isArray(options.requireRole) ? options.requireRole : [options.requireRole];
+        const roles = Array.isArray(options.requireRole) ? options.requireRole : [options.requireRole];
+        // An empty list would let nobody in; treat it as a mistake and fail closed to admin.
+        return roles.length ? roles : ['admin'];
     }
-    if (options.requireAdmin || options.requireFullStaff) {
-        return ['admin', 'staff'];
-    }
+    if (options.requireAdmin) return ['admin'];
+    if (options.requireFullStaff) return ['admin', 'staff'];
     return null;
 }
 
@@ -83,7 +84,8 @@ function bearerToken(request: Request): string {
  *
  * - requireRole: 'admin'                 → admin only
  * - requireRole: ['admin', 'staff']      → admin or staff
- * - requireAdmin: true                   → admin or staff
+ * - requireAdmin: true                   → admin only
+ * - requireFullStaff: true               → admin or staff
  *
  * `user` is set whenever the session itself is valid, so a failed role check
  * (403) can be told apart from no/invalid session (401).
@@ -116,7 +118,8 @@ export async function verifyAuth(
 
 /**
  * Verify admin auth for server actions, from a token the client passes in.
- * With no options it lets in admin or staff; pass requireRole to narrow it.
+ * With no options it lets in administrators only; pass
+ * requireRole: ['admin', 'staff'] (or requireFullStaff) to let staff in too.
  */
 export async function verifyAdminToken(
     token: string,
@@ -133,7 +136,7 @@ export async function verifyAdminToken(
             return { authenticated: false, error: 'Invalid or expired token' };
         }
 
-        return await roleCheck(user, allowedRoles({ requireAdmin: true, ...options })!);
+        return await roleCheck(user, allowedRoles(options) ?? ['admin']);
     } catch (err: any) {
         return { authenticated: false, error: err?.message || 'Auth failed' };
     }

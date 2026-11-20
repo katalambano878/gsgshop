@@ -37,6 +37,6 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ categories });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to load categories' }, { status: 500 });
+    return (console.error('[brain] Failed to load categories:', error?.code || error?.name || 'error'), NextResponse.json({ error: 'Failed to load categories' }, { status: 500 }));
   }
 }

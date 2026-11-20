@@ -50,10 +50,12 @@ export default function ProductSalesStats({ isOpen, onClose }: { isOpen: boolean
         // 'all' leaves startDate as null
 
         try {
-            // We fetch order_items and filter by the parent order's created_at
-            let query = supabase
-                .from('order_items')
-                .select(`
+            // We fetch order_items and filter by the parent order's created_at.
+            // Paged: one select is capped at 1000 rows, so "All time" must read every page.
+            const buildQuery = () => {
+                let query = supabase
+                    .from('order_items')
+                    .select(`
           quantity,
           product_name,
           product_id,
@@ -65,18 +67,24 @@ export default function ProductSalesStats({ isOpen, onClose }: { isOpen: boolean
             status,
             payment_status
           )
-        `);
+        `)
+                    // Real sales only: paid, and not cancelled or refunded
+                    .eq('orders.payment_status', 'paid')
+                    .not('orders.status', 'in', '(cancelled,refunded)');
+                if (startDate) {
+                    query = query.gte('orders.created_at', startDate);
+                }
+                return query.order('id', { ascending: true });
+            };
 
-            // Only include paid orders (confirmed) and exclude cancelled
-            query = query.eq('orders.payment_status', 'paid').neq('orders.status', 'cancelled');
-
-            if (startDate) {
-                query = query.gte('orders.created_at', startDate);
+            const PAGE = 1000;
+            const data: any[] = [];
+            for (let from = 0; ; from += PAGE) {
+                const { data: page, error } = await buildQuery().range(from, from + PAGE - 1);
+                if (error) throw error;
+                data.push(...(page || []));
+                if (!page || page.length < PAGE) break;
             }
-
-            const { data, error } = await query;
-
-            if (error) throw error;
 
             if (data) {
                 const map = new Map<string, SalesStat>();
@@ -97,14 +105,14 @@ export default function ProductSalesStats({ isOpen, onClose }: { isOpen: boolean
                     }
 
                     const entry = map.get(pid)!;
-                    entry.itemsSold += (item.quantity || 0);
-                    entry.totalRevenue += (item.total_price || 0);
+                    entry.itemsSold += Number(item.quantity || 0);
+                    entry.totalRevenue += Number(item.total_price || 0);
 
                     // Track variants
                     const variantName = item.variant_name || 'Default';
                     const existing = entry.variants.get(variantName) || { quantity: 0, revenue: 0 };
                     existing.quantity += (item.quantity || 0);
-                    existing.revenue += (item.total_price || 0);
+                    existing.revenue += Number(item.total_price || 0);
                     entry.variants.set(variantName, existing);
 
                     const orderId = item.orders?.id;
@@ -126,8 +134,9 @@ export default function ProductSalesStats({ isOpen, onClose }: { isOpen: boolean
 
                 setStats(result);
             }
-        } catch (err) {
+        } catch (err: any) {
             console.error('Error fetching product stats:', err);
+            alert(`Could not load sales figures: ${err?.message || 'unknown error'}`);
         } finally {
             setLoading(false);
         }
@@ -147,6 +156,7 @@ export default function ProductSalesStats({ isOpen, onClose }: { isOpen: boolean
                     </div>
                     <button
                         onClick={onClose}
+                        aria-label="Close sales breakdown"
                         className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors cursor-pointer"
                     >
                         <i className="ri-close-line text-2xl text-gray-500"></i>
@@ -261,7 +271,7 @@ export default function ProductSalesStats({ isOpen, onClose }: { isOpen: boolean
                 </div>
 
                 <div className="p-4 border-t border-gray-100 bg-gray-50 text-xs text-gray-500 flex justify-between">
-                    <span>* Only paid/confirmed orders · Click a row to see variant breakdown</span>
+                    <span>* Paid orders only, excluding cancelled and refunded · Click a row to see variant breakdown</span>
                     <span>Showing top {stats.length} products</span>
                 </div>
             </div>

@@ -3,9 +3,12 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import PageHero from '@/components/PageHero';
+import { useDeliveryPoints, mapsUrl } from '@/components/legal/PickupPoint';
+import { OPENING_HOURS } from '@/components/legal/business-facts';
 
 export default function ShippingPage() {
   const [selectedZone, setSelectedZone] = useState('');
+  const { hub, station, failed: pointsFailed } = useDeliveryPoints();
 
   const deliveryOptions = [
     {
@@ -13,7 +16,7 @@ export default function ShippingPage() {
       type: 'Pickup',
       time: 'Daily after confirmation',
       cost: 'No delivery fee',
-      description: 'Pickup location will be displayed at the confirmation stage. Collect your items at your convenience.',
+      description: 'Collect from our pickup point (shown below and at checkout) once we tell you by SMS or WhatsApp that your order is ready.',
       icon: 'ri-store-2-line',
       highlight: false,
     },
@@ -40,7 +43,7 @@ export default function ShippingPage() {
       type: 'Joint Express',
       time: 'Daily',
       cost: 'Shared fee at checkout',
-      description: 'Share the delivery fee with a neighbor or colleague — items remain completely private. Same perishable product rule applies. Available in 2hr, 6hr, 12hr, 24hr, or 48hr windows after confirmation.',
+      description: 'Share the delivery fee with a neighbour or colleague — items remain completely private. Same perishable product rule applies. Available in 2hr, 6hr, 12hr, 24hr, or 48hr windows after confirmation.',
       icon: 'ri-group-line',
       highlight: false,
     },
@@ -50,7 +53,7 @@ export default function ShippingPage() {
       time: 'Continue shopping after checkout',
       cost: 'Free delivery',
       description:
-        'Select this option if you wish to continue shopping at Personal Shopper. Pay for your current cart, then visit Personal Shopper for additional shopping.',
+        'Pay for your current cart, then continue shopping on Personal Shopper. Your goods come together with your Personal Shopper request.',
       icon: 'ri-shopping-bag-3-line',
       highlight: false,
     },
@@ -58,41 +61,24 @@ export default function ShippingPage() {
 
   const zones = [
     {
-      zone: 'Zone 1 — Accra Metro',
-      areas: 'East Legon, Osu, Labone, Airport Residential, Dzorwulu, Cantonments, Adabraka, Tema',
+      zone: 'Greater Accra',
+      areas: 'Accra and the rest of Greater Accra, including Tema and Kasoa. Delivered to the location you set at checkout.',
       freeDelivery: 'Daily',
-      express: '2hr–48hr windows',
+      express: '2hr–48hr slots',
     },
     {
-      zone: 'Zone 2 — Greater Accra',
-      areas: 'Madina, Legon, Haatso, Achimota, Dansoman, Spintex, Teshie, Kasoa',
-      freeDelivery: 'Daily',
-      express: '6hr–48hr windows',
+      zone: 'Outside Greater Accra',
+      areas: 'Kumasi, Takoradi, Cape Coast, Tamale and all other towns in Ghana. We deliver to a commercial transport station in Accra; the fare to your town is extra, paid to the transport company.',
+      freeDelivery: 'To the station, daily',
+      express: 'To the station, 2hr–48hr slots',
     },
-    {
-      zone: 'Zone 3 — Major Cities',
-      areas: 'Kumasi, Takoradi, Cape Coast, Tamale, Sunyani, Ho, Koforidua. We deliver to a commercial transport station in Accra; transport charges to your town are extra.',
-      freeDelivery: 'Daily',
-      express: '24hr–48hr windows',
-    },
-    {
-      zone: 'Zone 4 — Other Areas',
-      areas: 'All other locations within Ghana, via a commercial transport station in Accra (transport charges extra)',
-      freeDelivery: 'Contact us',
-      express: 'Contact us',
-    },
-  ];
-
-  const pickupLocations = [
-    { name: 'GSG Hub — Accra Central', address: 'Exact address provided at confirmation', hours: 'Mon–Sat, 8am–6pm' },
-    { name: 'GSG Hub — East Legon', address: 'Exact address provided at confirmation', hours: 'Mon–Sat, 9am–5pm' },
   ];
 
   return (
     <div className="min-h-screen bg-gray-50">
       <PageHero
         title="Shipping & Delivery"
-        subtitle="Pickup, Free Delivery, Sole Express, Joint Express, and Add To Personal Shopper — across Ghana."
+        subtitle="Pickup, Free Delivery, Sole Express, Joint Express, and Add To Personal Shopper — in and around Accra, with onward travel from an Accra transport station for other regions."
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
@@ -138,8 +124,8 @@ export default function ShippingPage() {
             </div>
             <h2 className="text-2xl font-bold text-gsg-black mb-3">Delivery Total at Checkout</h2>
             <p className="text-gray-600 leading-relaxed mb-6">
-              Search your area or landmark at checkout — we calculate the distance from our Accra hub
-              and show your delivery total before you pay.
+              Search your area or landmark at checkout. We calculate the distance from our Accra hub
+              and show your delivery total before you pay. Joint Express splits the fee with a neighbour.
             </p>
             <Link
               href="/checkout"
@@ -159,7 +145,9 @@ export default function ShippingPage() {
           </div>
 
           <div className="max-w-md mx-auto mb-8">
+            <label htmlFor="zone-select" className="sr-only">Delivery zone</label>
             <select
+              id="zone-select"
               value={selectedZone}
               onChange={(e) => setSelectedZone(e.target.value)}
               className="w-full px-5 py-4 rounded-xl border-2 border-gray-200 bg-white text-gsg-black font-medium focus:border-gsg-purple focus:ring-2 focus:ring-gsg-purple/20 transition-all cursor-pointer appearance-none"
@@ -219,29 +207,49 @@ export default function ShippingPage() {
           )}
         </div>
 
-        {/* Pickup Locations */}
-        <div className="mb-20">
+        {/* Pickup Point */}
+        <div id="pickup-point" className="mb-20 scroll-mt-24">
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
-            <h2 className="text-3xl font-bold text-gsg-black">Pickup Locations</h2>
-            <p className="text-gray-500">Collect from your preferred hub after confirmation.</p>
+            <h2 className="text-3xl font-bold text-gsg-black">Pickup Point</h2>
+            <p className="text-gray-500">Collect once we tell you your order is ready.</p>
           </div>
           <div className="grid md:grid-cols-2 gap-6">
-            {pickupLocations.map((loc, i) => (
-              <div key={i} className="bg-white rounded-2xl border border-gray-100 p-8 shadow-sm hover:shadow-xl transition-all group">
+            <div className="bg-white rounded-2xl border border-gray-100 p-8 shadow-sm">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center shrink-0">
+                  <i className="ri-map-pin-2-fill text-xl text-gsg-purple" aria-hidden="true"></i>
+                </div>
+                <div>
+                  <h3 className="font-bold text-gsg-black mb-1 text-lg">
+                    {hub ? hub.label : pointsFailed ? 'Pickup point' : 'Loading pickup point…'}
+                  </h3>
+                  {hub ? (
+                    <a href={mapsUrl(hub)} target="_blank" rel="noopener noreferrer" className="text-gsg-purple text-sm font-semibold underline">Open in Google Maps</a>
+                  ) : pointsFailed ? (
+                    <p className="text-gray-500 text-sm">Ask us on WhatsApp for the current pickup point.</p>
+                  ) : null}
+                  <ul className="mt-3 text-sm text-gray-600 space-y-1">
+                    {OPENING_HOURS.map((h) => (
+                      <li key={h.days}><i className="ri-time-line text-gsg-purple mr-1" aria-hidden="true"></i>{h.days}: {h.hours}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+            {station && (
+              <div className="bg-white rounded-2xl border border-gray-100 p-8 shadow-sm">
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-gsg-purple group-hover:text-white transition-colors">
-                    <i className="ri-map-pin-2-fill text-xl text-gsg-purple group-hover:text-white"></i>
+                  <div className="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center shrink-0">
+                    <i className="ri-bus-2-line text-xl text-gsg-purple" aria-hidden="true"></i>
                   </div>
                   <div>
-                    <h3 className="font-bold text-gsg-black mb-1 text-lg">{loc.name}</h3>
-                    <p className="text-gray-500 text-sm mb-3">{loc.address}</p>
-                    <div className="inline-flex items-center gap-1.5 text-sm text-gsg-purple font-semibold bg-purple-50 px-3 py-1 rounded-full">
-                      <i className="ri-time-line"></i> {loc.hours}
-                    </div>
+                    <h3 className="font-bold text-gsg-black mb-1 text-lg">Outside Greater Accra</h3>
+                    <p className="text-gray-600 text-sm mb-2">Orders for other regions go to {station.label}. The onward fare is paid to the transport company.</p>
+                    <a href={mapsUrl(station)} target="_blank" rel="noopener noreferrer" className="text-gsg-purple text-sm font-semibold underline">Open in Google Maps</a>
                   </div>
                 </div>
               </div>
-            ))}
+            )}
           </div>
         </div>
 
@@ -254,17 +262,17 @@ export default function ShippingPage() {
                 {
                   step: '01',
                   title: 'Order Processing',
-                  text: 'Orders confirmed before noon are processed same day. We inspect and pack items for safe transit.',
+                  text: 'Once your payment is confirmed, we confirm your order and pack your items for your chosen delivery slot.',
                 },
                 {
                   step: '02',
                   title: 'Dispatch',
-                  text: 'Your order is dispatched via your selected method and tracking details are shared by email/SMS.',
+                  text: 'Your order is dispatched by your selected method, and we keep you updated by SMS or WhatsApp.',
                 },
                 {
                   step: '03',
                   title: 'Track in Real Time',
-                  text: 'Use your order number to monitor status from confirmation through delivery.',
+                  text: 'Use your order number with your phone or email on the Order Tracking page to check the status.',
                 },
                 {
                   step: '04',
@@ -291,13 +299,8 @@ export default function ShippingPage() {
               {[
                 {
                   icon: 'ri-time-line',
-                  title: 'Cut-off Times',
-                  text: 'Orders confirmed before noon dispatch same day. After noon dispatch next business day.',
-                },
-                {
-                  icon: 'ri-calendar-line',
-                  title: 'Business Days',
-                  text: 'Delivery windows exclude Sundays and public holidays. Processing is Monday to Saturday.',
+                  title: 'Opening Hours',
+                  text: OPENING_HOURS.map((h) => `${h.days}: ${h.hours}`).join('. ') + '. Delivery slots count from when we confirm your order.',
                 },
                 {
                   icon: 'ri-phone-line',
@@ -307,12 +310,12 @@ export default function ShippingPage() {
                 {
                   icon: 'ri-home-line',
                   title: 'Failed Delivery Policy',
-                  text: 'Two attempts are made. Afterward, orders are held for 5 business days at pickup.',
+                  text: 'We confirm the handover with you before dispatch. If it still falls through, we rebook non-perishable orders with you (the new delivery fee is paid by the customer); perishables cannot be rebooked once dispatched.',
                 },
                 {
                   icon: 'ri-shield-check-line',
                   title: 'Package Security',
-                  text: 'Report damage or missing items within 24 hours so we can resolve quickly.',
+                  text: 'Report damaged, wrong or missing items within 24 hours of delivery, with photos on WhatsApp or through the returns form.',
                 },
               ].map((item) => (
                 <div key={item.title} className="flex gap-3">

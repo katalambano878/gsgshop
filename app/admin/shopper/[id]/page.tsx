@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { adminFetch, errorText } from '@/components/admin/adminFetch';
 
 type ShopperItem = {
   id: string;
@@ -18,6 +19,7 @@ type StatusEvent = {
   id: string;
   status: string;
   note: string | null;
+  created_by?: string | null;
   created_at: string;
 };
 
@@ -53,17 +55,29 @@ type ShopperRequest = {
   history: StatusEvent[];
 };
 
-const STATUS_OPTIONS = [
-  'SUBMITTED',
-  'REVIEWING',
-  'SOURCING',
-  'AWAITING_CONFIRMATION',
-  'PAID',
-  'SHOPPING',
-  'OUT_FOR_DELIVERY',
-  'DELIVERED',
-  'CANCELLED',
-] as const;
+/**
+ * Status moves staff may make by hand. PAID is never set here: only the
+ * payment callback sets it. The server route enforces the same rules.
+ */
+const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  SUBMITTED: ['REVIEWING', 'SOURCING', 'CANCELLED'],
+  PAID: ['REVIEWING', 'SOURCING', 'SHOPPING', 'CANCELLED'],
+  REVIEWING: ['SOURCING', 'AWAITING_CONFIRMATION', 'CANCELLED'],
+  SOURCING: ['REVIEWING', 'AWAITING_CONFIRMATION', 'SHOPPING', 'CANCELLED'],
+  AWAITING_CONFIRMATION: ['SOURCING', 'SHOPPING', 'CANCELLED'],
+  SHOPPING: ['OUT_FOR_DELIVERY', 'CANCELLED'],
+  OUT_FOR_DELIVERY: ['DELIVERED', 'SHOPPING'],
+  DELIVERED: [],
+  CANCELLED: [],
+};
+
+const PAYMENT_LABELS: Record<string, { label: string; cls: string; icon: string }> = {
+  pending: { label: 'Not paid', cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: 'ri-time-line' },
+  paid: { label: 'Paid', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: 'ri-checkbox-circle-fill' },
+  failed: { label: 'Payment failed', cls: 'bg-red-50 text-red-700 border-red-200', icon: 'ri-close-circle-fill' },
+  refunded: { label: 'Refunded', cls: 'bg-purple-50 text-purple-700 border-purple-200', icon: 'ri-refund-2-line' },
+  partially_refunded: { label: 'Part refunded', cls: 'bg-purple-50 text-purple-700 border-purple-200', icon: 'ri-refund-2-line' },
+};
 
 // Workflow order: customer pays the estimate UPFRONT (right after submission),
 // then admin works the request and may need to cancel + refund along the way.
@@ -124,6 +138,12 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
   const [finalizeMsg, setFinalizeMsg] = useState<string | null>(null);
   const [itemSavingId, setItemSavingId] = useState<string | null>(null);
   const [itemSavedId, setItemSavedId] = useState<string | null>(null);
+  const [itemError, setItemError] = useState<{ id: string; text: string } | null>(null);
+  const [statusError, setStatusError] = useState('');
+  const [showCancel, setShowCancel] = useState(false);
+  const [cancelNote, setCancelNote] = useState('');
+  const [statusNote, setStatusNote] = useState('');
+  const [staffNames, setStaffNames] = useState<Record<string, string>>({});
 
   useEffect(() => { params.then(p => setId(p.id)); }, [params]);
   useEffect(() => { if (id) fetchRequest(id); }, [id]);
@@ -154,6 +174,20 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
 
       if (error) throw error;
       setRequest(data as ShopperRequest);
+
+      // Who made each change: names through the staff route (profiles are
+      // not readable directly).
+      const ids = Array.from(new Set(((data as ShopperRequest).history || []).map(h => h.created_by).filter(Boolean))) as string[];
+      if (ids.length) {
+        const res = await adminFetch<{ profiles: Array<{ id: string; full_name: string | null; email: string | null }> }>(
+          `/api/admin/customers/profiles?ids=${ids.join(',')}`
+        );
+        if (res.ok) {
+          const map: Record<string, string> = {};
+          (res.data.profiles || []).forEach(p => { map[p.id] = p.full_name || p.email || 'Staff member'; });
+          setStaffNames(map);
+        }
+      }
     } catch (err) {
       console.error('Error fetching request:', err);
     } finally {
@@ -161,28 +195,40 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
     }
   };
 
-  const updateStatus = async (newStatus: string) => {
-    if (!request || newStatus === request.status) return;
+  const updateStatus = async (newStatus: string, note?: string) => {
+    if (!request || newStatus === request.status) return false;
     setSaving(true);
+    setStatusError('');
     try {
-      const { error } = await supabase
-        .from('shopper_requests')
-        .update({ status: newStatus })
-        .eq('id', request.id);
-      if (error) throw error;
-
-      await supabase.from('shopper_status_history').insert({
-        request_id: request.id,
-        status: newStatus,
-        note: `Status updated to ${newStatus} by admin`,
+      const res = await adminFetch<{ success?: boolean }>(`/api/shopper/requests/${request.id}/status`, {
+        body: { status: newStatus, ...(note && note.trim() ? { note: note.trim() } : {}) },
       });
-
+      if (!res.ok || res.data.success === false) {
+        setStatusError(`Status not changed: ${errorText(res.data)}`);
+        return false;
+      }
+      setStatusNote('');
       if (id) fetchRequest(id);
-    } catch (err) {
-      console.error('Error updating status:', err);
-      alert('Failed to update status');
+      return true;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const confirmCancel = async () => {
+    if (!request) return;
+    const paid = request.payment_status === 'paid' || request.payment_status === 'partially_refunded';
+    if (paid && !cancelNote.trim()) {
+      setStatusError('Say what happens to the customer\'s money (for example: "Refund of GH₵120 to be sent by MoMo").');
+      return;
+    }
+    const note = cancelNote.trim()
+      ? `Cancelled. ${cancelNote.trim()}`
+      : 'Cancelled.';
+    const ok = await updateStatus('CANCELLED', paid ? `${note} No money was refunded automatically.` : note);
+    if (ok) {
+      setShowCancel(false);
+      setCancelNote('');
     }
   };
 
@@ -227,12 +273,32 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
     }
   };
 
-  const updateItemMarketPrice = async (itemId: string, price: string) => {
-    const parsed = parseFloat(price);
-    const value = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  /**
+   * Saves one market price. Blank clears it; 0 is allowed (item not found or
+   * free). On failure the field goes back to the saved value and the error
+   * is shown next to it.
+   */
+  const updateItemMarketPrice = async (itemId: string, input: HTMLInputElement) => {
+    const raw = input.value.trim();
+    const saved = request?.items.find(it => it.id === itemId)?.market_price ?? null;
+    const restore = () => { input.value = saved === null ? '' : String(saved); };
+    let value: number | null;
+    if (raw === '') {
+      value = null;
+    } else {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setItemError({ id: itemId, text: 'Enter a price of 0 or more.' });
+        restore();
+        return;
+      }
+      value = Math.round(parsed * 100) / 100;
+    }
+    if (value === (saved === null ? null : Number(saved))) return;
 
     setItemSavingId(itemId);
     setItemSavedId(null);
+    setItemError(null);
     try {
       const { error } = await supabase
         .from('shopper_request_items')
@@ -246,8 +312,9 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
       }));
       setItemSavedId(itemId);
       setTimeout(() => setItemSavedId(curr => curr === itemId ? null : curr), 1500);
-    } catch (err) {
-      console.error('Error updating price:', err);
+    } catch (err: any) {
+      restore();
+      setItemError({ id: itemId, text: `Price not saved: ${err?.message || 'unknown error'}` });
     } finally {
       setItemSavingId(curr => curr === itemId ? null : curr);
     }
@@ -265,10 +332,11 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
     return marketSubtotal + markup + fee;
   }, [marketSubtotal, deliveryFeeInput, markupPct]);
 
-  const allItemsPriced = !!request && request.items.every(it => it.market_price !== null && Number(it.market_price) > 0);
+  const allItemsPriced = !!request && request.items.every(it => it.market_price !== null && Number(it.market_price) >= 0);
 
   const isCancelled = request?.status === 'CANCELLED';
   const isPaid = request?.payment_status === 'paid';
+  const moneyTaken = isPaid || request?.payment_status === 'partially_refunded';
 
   // The "active" step in the stepper. CANCELLED is rendered separately, so we
   // treat the request as off the stepper entirely. If the customer has paid but
@@ -281,6 +349,7 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
     }
     return i;
   })();
+  const paidStepIndex = WORKFLOW_STEPS.findIndex(s => s.key === 'PAID');
 
   if (loading) {
     return (
@@ -338,12 +407,15 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                 <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
                 {request.status.replace(/_/g, ' ')}
               </span>
-              {request.payment_status === 'paid' && (
-                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border bg-emerald-50 text-emerald-700 border-emerald-200">
-                  <i className="ri-checkbox-circle-fill" /> Paid
-                  {request.payment_provider ? ` · ${request.payment_provider}` : ''}
-                </span>
-              )}
+              {(() => {
+                const ps = PAYMENT_LABELS[request.payment_status || 'pending'] || PAYMENT_LABELS.pending;
+                return (
+                  <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border ${ps.cls}`}>
+                    <i className={ps.icon} /> {ps.label}
+                    {moneyTaken && request.payment_provider ? ` · ${request.payment_provider}` : ''}
+                  </span>
+                );
+              })()}
             </div>
             <p className="text-sm text-gray-500">
               <span className="font-mono">{request.id}</span>
@@ -388,30 +460,25 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
               <h3 className="font-bold text-red-900 text-base">Request cancelled</h3>
               <p className="text-sm text-red-800 mt-0.5">
                 This request ended before delivery.
-                {isPaid
-                  ? ' The customer paid — issue a refund if you have not already.'
-                  : ' No payment was captured.'}
+                {moneyTaken
+                  ? ` The customer paid${request.payment_provider ? ` through ${request.payment_provider}` : ''}. Cancelling did not refund anything: send any refund yourself through the payment provider or MoMo, and record it in the activity notes.`
+                  : request.payment_status === 'refunded'
+                    ? ' The payment is marked as refunded.'
+                    : ' No payment was captured.'}
               </p>
             </div>
-            {isPaid && (
-              <a
-                href="https://dashboard.paystack.com/#/transactions"
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-bold text-red-700 hover:text-red-900 inline-flex items-center gap-1 whitespace-nowrap"
-              >
-                <i className="ri-external-link-line" /> Open gateway dashboard
-              </a>
-            )}
           </div>
         ) : (
           <div className="mt-8 -mx-6 md:-mx-8 px-6 md:px-8 overflow-x-auto">
             <div className="min-w-[760px]">
               <div className="flex items-start">
                 {WORKFLOW_STEPS.map((step, i) => {
-                  const isPast = activeStepIndex > i;
-                  const isCurrent = activeStepIndex === i;
-                  const isFuture = activeStepIndex < i;
+                  // The Paid step reflects the real payment, not the position
+                  // in the workflow.
+                  const isPaidStep = i === paidStepIndex;
+                  const isPast = isPaidStep ? isPaid && activeStepIndex > i : activeStepIndex > i;
+                  const isCurrent = isPaidStep ? isPaid && activeStepIndex === i : activeStepIndex === i;
+                  const isFuture = !isPast && !isCurrent;
                   const stepStyle = STATUS_STYLES[step.key] ?? STATUS_STYLES.SUBMITTED;
                   return (
                     <div key={step.key} className="flex-1 flex items-start last:flex-initial">
@@ -439,11 +506,8 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                             {step.hint}
                           </span>
                         )}
-                        {/* Side-branch hint under AWAITING_CONFIRMATION */}
-                        {step.key === 'AWAITING_CONFIRMATION' && (
-                          <span className="mt-1 text-[10px] text-red-500 font-bold whitespace-nowrap inline-flex items-center gap-1">
-                            <i className="ri-arrow-right-down-line" /> or Cancel & Refund
-                          </span>
+                        {isPaidStep && !isPaid && activeStepIndex > i && (
+                          <span className="mt-1 text-[10px] text-amber-600 font-bold whitespace-nowrap">Not paid yet</span>
                         )}
                       </div>
                       {i < WORKFLOW_STEPS.length - 1 && (
@@ -463,47 +527,99 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
         )}
 
         {/* STATUS QUICK ACTIONS */}
-        <div className="mt-6 flex flex-wrap gap-2 items-center pt-6 border-t border-gray-100">
-          <span className="text-xs font-bold uppercase tracking-wider text-gray-500 mr-2">Move to:</span>
-          {STATUS_OPTIONS
-            .filter(s => s !== request.status && s !== 'CANCELLED')
-            .map((s) => {
-              const ss = STATUS_STYLES[s];
-              return (
-                <button
-                  key={s}
-                  onClick={() => updateStatus(s)}
-                  disabled={saving}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${ss.pill} hover:scale-[1.02] transition-all disabled:opacity-50`}
-                >
-                  {s.replace(/_/g, ' ')}
-                </button>
-              );
-            })}
-          {/* CANCELLED is a destructive terminal action — separated and confirmed */}
-          {request.status !== 'CANCELLED' && (
-            <button
-              onClick={() => {
-                const msg = isPaid
-                  ? 'Cancel this request? The customer has already paid — remember to issue a refund through the payment gateway.'
-                  : 'Cancel this request?';
-                if (confirm(msg)) updateStatus('CANCELLED');
-              }}
-              disabled={saving}
-              className="ml-auto px-3 py-1.5 rounded-lg text-xs font-bold border bg-red-50 text-red-700 border-red-200 hover:bg-red-100 transition-all disabled:opacity-50 inline-flex items-center gap-1.5"
-              title={isPaid ? 'Customer has paid — refund will be required' : 'Cancel this request'}
-            >
-              <i className="ri-close-circle-line" />
-              Cancel{isPaid ? ' & Refund' : ''}
-            </button>
+        <div className="mt-6 pt-6 border-t border-gray-100">
+          {statusError && (
+            <div className="mb-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2" role="alert">{statusError}</div>
           )}
-          {saving && (
-            <span className="text-xs text-gray-400 inline-flex items-center gap-1.5">
-              <i className="ri-loader-4-line animate-spin" /> Saving…
-            </span>
+          {(ALLOWED_TRANSITIONS[request.status] || []).length === 0 ? (
+            <p className="text-sm text-gray-500">This request is {request.status === 'DELIVERED' ? 'delivered' : 'closed'}; its status can no longer change.</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-500 mr-2">Move to:</span>
+                {(ALLOWED_TRANSITIONS[request.status] || [])
+                  .filter(s => s !== 'CANCELLED')
+                  .map((s) => {
+                    const ss = STATUS_STYLES[s];
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => {
+                          if (['SHOPPING', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(s) && !isPaid &&
+                            !confirm(`This request is not marked as paid (${(PAYMENT_LABELS[request.payment_status || 'pending'] || PAYMENT_LABELS.pending).label.toLowerCase()}). Move it to ${s.replace(/_/g, ' ').toLowerCase()} anyway?`)) return;
+                          updateStatus(s, statusNote);
+                        }}
+                        disabled={saving}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${ss.pill} hover:scale-[1.02] transition-all disabled:opacity-50`}
+                      >
+                        {s.replace(/_/g, ' ')}
+                      </button>
+                    );
+                  })}
+                {(ALLOWED_TRANSITIONS[request.status] || []).includes('CANCELLED') && (
+                  <button
+                    onClick={() => { setStatusError(''); setShowCancel(true); }}
+                    disabled={saving}
+                    className="ml-auto px-3 py-1.5 rounded-lg text-xs font-bold border bg-red-50 text-red-700 border-red-200 hover:bg-red-100 transition-all disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    <i className="ri-close-circle-line" />
+                    Cancel request
+                  </button>
+                )}
+                {saving && (
+                  <span className="text-xs text-gray-400 inline-flex items-center gap-1.5">
+                    <i className="ri-loader-4-line animate-spin" /> Saving…
+                  </span>
+                )}
+              </div>
+              <input
+                type="text"
+                value={statusNote}
+                onChange={(e) => setStatusNote(e.target.value)}
+                placeholder="Optional note for the activity log (saved with the next status change)"
+                aria-label="Note for the next status change"
+                className="mt-3 w-full md:w-2/3 px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
+              />
+              <p className="text-[11px] text-gray-400 mt-1">Paid is set automatically when the customer&apos;s payment comes through; it cannot be set by hand. Changing the status does not message the customer: contact them on WhatsApp where needed.</p>
+            </>
           )}
         </div>
       </div>
+
+      {showCancel && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !saving && setShowCancel(false)}>
+          <div className="bg-white rounded-xl p-6 w-full max-w-md" role="dialog" aria-modal="true" aria-labelledby="cancel-title" onClick={(e) => e.stopPropagation()}>
+            <h2 id="cancel-title" className="text-xl font-bold text-gray-900 mb-2">Cancel {request.request_number || 'this request'}?</h2>
+            {moneyTaken ? (
+              <p className="text-sm text-gray-700 mb-3">
+                The customer has paid {fmtGHS(request.total_final ?? request.total_est)}
+                {request.payment_provider ? ` through ${request.payment_provider}` : ''}.{' '}
+                <strong>Cancelling does not refund any money.</strong> Send the refund yourself (payment provider dashboard or MoMo) and write here what you did or will do. The note is saved in the activity log.
+              </p>
+            ) : (
+              <p className="text-sm text-gray-700 mb-3">No payment has been taken for this request. Add a reason if you like; it is saved in the activity log.</p>
+            )}
+            <label htmlFor="cancel-note" className="block text-sm font-semibold text-gray-700 mb-1">{moneyTaken ? 'Refund note (required)' : 'Reason (optional)'}</label>
+            <textarea
+              id="cancel-note"
+              value={cancelNote}
+              onChange={(e) => setCancelNote(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100"
+              placeholder={moneyTaken ? 'e.g. Customer asked to cancel; refund of GH₵120 sent by MoMo on 20 Nov' : 'e.g. Customer asked to cancel'}
+            />
+            {statusError && (
+              <div className="mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2" role="alert">{statusError}</div>
+            )}
+            <div className="flex justify-end gap-3 mt-4">
+              <button onClick={() => setShowCancel(false)} disabled={saving} className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-lg font-semibold">Keep request</button>
+              <button onClick={confirmCancel} disabled={saving} className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold disabled:opacity-50">
+                {saving ? 'Cancelling...' : 'Cancel request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* LEFT — ITEMS */}
@@ -566,15 +682,15 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                               min="0"
                               step="0.01"
                               defaultValue={item.market_price ?? ''}
-                              onBlur={(e) => {
-                                if (parseFloat(e.target.value || '0') !== Number(item.market_price ?? 0)) {
-                                  updateItemMarketPrice(item.id, e.target.value);
-                                }
-                              }}
+                              onBlur={(e) => updateItemMarketPrice(item.id, e.currentTarget)}
+                              aria-label={`Market price for ${item.name_brand}`}
                               className="w-full pl-10 pr-2 py-1.5 border border-purple-200 rounded-lg outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-100 text-sm font-medium"
                               placeholder="0.00"
                             />
                           </div>
+                          {itemError?.id === item.id && (
+                            <p className="text-[11px] mt-1 font-bold text-red-600" role="alert">{itemError.text}</p>
+                          )}
                           {hasMarket && est > 0 && (
                             <p className={`text-[11px] mt-1 font-bold ${diff > 0 ? 'text-red-600' : diff < 0 ? 'text-green-600' : 'text-gray-400'}`}>
                               {diff > 0 ? '+' : ''}{diffPct.toFixed(1)}% vs est.
@@ -591,7 +707,7 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
             {!allItemsPriced && (
               <div className="px-6 py-3 bg-yellow-50 border-t border-yellow-100 text-xs text-yellow-800 flex items-center gap-2">
                 <i className="ri-information-line" />
-                {request.items.filter(it => !it.market_price).length} item(s) still need a market price before you can finalise the total.
+                {request.items.filter(it => it.market_price === null).length} item(s) still need a market price before you can finalise the total. Enter 0 for an item you could not find.
               </div>
             )}
           </div>
@@ -616,6 +732,9 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                           {evt.status.replace(/_/g, ' ')}
                         </span>
                         <span className="text-xs text-gray-400">{fmtDateTime(evt.created_at)}</span>
+                        <span className="text-xs text-gray-500">
+                          {evt.created_by ? `by ${staffNames[evt.created_by] || 'staff member'}` : 'by the system or customer'}
+                        </span>
                       </div>
                       {evt.note && <p className="text-sm text-gray-600">{evt.note}</p>}
                     </li>
@@ -757,7 +876,7 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
           </div>
 
           {/* Payment */}
-          {request.payment_status !== 'paid' ? (
+          {isCancelled ? null : (request.payment_status || 'pending') === 'pending' || request.payment_status === 'failed' ? (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
               <h2 className="text-lg font-bold text-gray-900 mb-1 flex items-center gap-2">
                 <i className="ri-secure-payment-line text-purple-600" /> Payment
@@ -816,6 +935,16 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                 )}
               </div>
             </div>
+          ) : !isPaid ? (
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+              <h2 className="text-lg font-bold text-gray-900 mb-1 flex items-center gap-2">
+                <i className="ri-refund-2-line text-purple-600" /> Payment
+              </h2>
+              <p className="text-sm text-gray-700">
+                {(PAYMENT_LABELS[request.payment_status || ''] || { label: request.payment_status }).label}
+                {request.payment_provider ? ` (${request.payment_provider})` : ''}.
+              </p>
+            </div>
           ) : (
             <div className="bg-gradient-to-br from-green-50 to-emerald-50 border border-emerald-200 rounded-2xl p-6">
               <div className="flex items-start gap-3">
@@ -824,6 +953,7 @@ export default function AdminShopperRequestDetail({ params }: { params: Promise<
                 </div>
                 <div className="min-w-0 flex-1">
                   <h3 className="font-bold text-emerald-900">Payment received</h3>
+                  <p className="text-xs text-emerald-800 mt-1">Any difference after market pricing is settled with the customer on WhatsApp.</p>
                   <p className="text-2xl font-bold text-emerald-700 mt-1">
                     {fmtGHS(request.total_final ?? request.total_est)}
                   </p>

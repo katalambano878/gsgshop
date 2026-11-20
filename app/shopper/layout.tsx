@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     default: 'My Personal Shopper by GSG | List Them, We Shop For You in Ghana',
   },
   description:
-    'Ghana\'s premium personal shopper service. Send us your shopping list — we source quality, fresh, and hard-to-find items at the exact source price. 15% or less Markup. Same-day delivery in Accra.',
+    'Personal shopper service in Accra. Send us your shopping list, pay the estimate, and we buy your items at the market price and deliver them to your door. Pay by Mobile Money or card.',
   keywords: [
     'personal shopper Ghana',
     'personal shopper Accra',
@@ -29,7 +29,6 @@ export const metadata: Metadata = {
     'grocery delivery Accra',
     'market shopping service',
     'imported goods Ghana',
-    'building materials delivery Accra',
     'pharmacy delivery Ghana',
     'GSG personal shopper',
     'shopper.gsgbrands.com.gh',
@@ -68,15 +67,14 @@ export const metadata: Metadata = {
     url: shopperUrl,
     title: 'My Personal Shopper by GSG | List Them, We Shop For You',
     description:
-      'Send us your list — we source at the exact market price. 15% or less Markup. Same-day delivery in Accra. Quality, fresh, and hard-to-find goods, all delivered to your door.',
+      'Send us your list and pay the estimate. We buy at the market price and deliver in Accra, with updates on WhatsApp.',
     siteName: 'My Personal Shopper by GSG',
   },
   twitter: {
     card: 'summary_large_image',
     title: 'My Personal Shopper by GSG | List Them, We Shop For You',
     description:
-      'Ghana\'s premium personal shopper service. Source price guaranteed. 15% or less Markup. WhatsApp updates, 24/7.',
-    creator: '@gsgbrandsgh',
+      'Personal shopper service in Accra. Send your list, pay the estimate, and we shop and deliver. Updates on WhatsApp.',
   },
   alternates: {
     canonical: shopperUrl,
@@ -93,12 +91,12 @@ const SHOPPER_JSON_LD = {
   name: 'My Personal Shopper by GSG',
   serviceType: 'Personal Shopping & Delivery',
   description:
-    'Premium personal shopper service in Ghana. Send your shopping list — we source convenience goods, specialty items, urgent essentials, and building materials at the exact market price.',
+    'Personal shopper service in Accra. Send your shopping list and we buy convenience goods, specialty items and urgent essentials at the market price and deliver them.',
   url: shopperUrl,
   image: `${shopperUrl}/opengraph-image`,
   areaServed: {
-    '@type': 'Country',
-    name: 'Ghana',
+    '@type': 'City',
+    name: 'Accra',
   },
   provider: {
     '@type': 'Organization',
@@ -113,15 +111,12 @@ const SHOPPER_JSON_LD = {
       availableLanguage: ['English'],
       areaServed: 'GH',
     },
-    sameAs: [
-      'https://www.instagram.com/gsgbrandsgh',
-      'https://wa.me/233246033792',
-    ],
+    sameAs: ['https://wa.me/233246033792'],
   },
   offers: {
     '@type': 'Offer',
     description:
-      'Source price + 15% or less Markup on items + delivery based on distance.',
+      'Market price of the items, plus a markup on the item subtotal shown before you pay, plus a delivery fee based on distance. Paid up front by Mobile Money or card.',
     priceCurrency: 'GHS',
     availability: 'https://schema.org/InStock',
   },
@@ -153,14 +148,6 @@ const SHOPPER_JSON_LD = {
           description: 'Pharmacy items and urgent essentials.',
         },
       },
-      {
-        '@type': 'Offer',
-        itemOffered: {
-          '@type': 'Service',
-          name: 'Building Materials',
-          description: 'Construction supplies delivered to site.',
-        },
-      },
     ],
   },
 };
@@ -172,16 +159,8 @@ const WEBSITE_JSON_LD = {
   url: shopperUrl,
   name: 'My Personal Shopper by GSG',
   description:
-    'Ghana\'s premium personal shopper service. List them — we shop for you.',
+    'Personal shopper service in Accra. List them — we shop for you.',
   publisher: { '@id': `${shopperUrl}/#organization` },
-  potentialAction: {
-    '@type': 'SearchAction',
-    target: {
-      '@type': 'EntryPoint',
-      urlTemplate: `${shopperUrl}/track?id={search_term_string}`,
-    },
-    'query-input': 'required name=search_term_string',
-  },
   inLanguage: 'en-GH',
 };
 
@@ -195,7 +174,7 @@ export default function ShopperLayout({
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify([SHOPPER_JSON_LD, WEBSITE_JSON_LD]),
+          __html: JSON.stringify([SHOPPER_JSON_LD, WEBSITE_JSON_LD]).replace(/</g, '\\u003c'),
         }}
       />
       <ShopperHeader />

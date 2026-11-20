@@ -28,7 +28,7 @@ export async function GET(
       .eq('order_id', orderId);
 
     if (itemsError) {
-      return NextResponse.json({ error: itemsError.message }, { status: 500 });
+      return (console.error('[brain] database error:', itemsError.code || 'error'), NextResponse.json({ error: 'Failed to load order' }, { status: 500 }));
     }
 
     return NextResponse.json({
@@ -49,6 +49,6 @@ export async function GET(
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to load order' }, { status: 500 });
+    return (console.error('[brain] Failed to load order:', error?.code || error?.name || 'error'), NextResponse.json({ error: 'Failed to load order' }, { status: 500 }));
   }
 }

@@ -84,7 +84,7 @@ export const COOKIES_SECTIONS: LegalSection[] = [
         <p>You can manage cookies in several ways:</p>
         <ul>
           <li><strong>Browser settings</strong> — most browsers let you accept, reject, or delete cookies, either entirely or per site.</li>
-          <li><strong>Cookie controls on our site</strong> — where offered, our cookie banner lets you choose which non-essential categories to allow.</li>
+
           <li><strong>Device controls</strong> — mobile operating systems offer their own ad-tracking and analytics controls.</li>
         </ul>
         <p>Disabling cookies may affect the functionality of parts of the Services.</p>

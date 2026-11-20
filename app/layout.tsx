@@ -9,6 +9,7 @@ import {
   generateOrganizationSchema,
   generateWebSiteSchema,
   getSiteUrl,
+  jsonLd,
   SITE_NAME,
   SITE_TAGLINE,
 } from "@/lib/seo";
@@ -111,15 +112,15 @@ export default function RootLayout({
 
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(generateOrganizationSchema()) }}
+          dangerouslySetInnerHTML={{ __html: jsonLd(generateOrganizationSchema()) }}
         />
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(generateWebSiteSchema()) }}
+          dangerouslySetInnerHTML={{ __html: jsonLd(generateWebSiteSchema()) }}
         />
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(generateOnlineStoreSchema()) }}
+          dangerouslySetInnerHTML={{ __html: jsonLd(generateOnlineStoreSchema()) }}
         />
       </head>
 

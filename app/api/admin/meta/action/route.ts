@@ -14,13 +14,26 @@ export const maxDuration = 120;
  *   { action: 'whatsapp' }          show the catalogue on the WhatsApp number
  *   { action: 'product', productIds } sync edited products (if auto-sync is on)
  *   { action: 'remove', skus }      take deleted products out (if auto-sync is on)
+ *
+ * 'product' and 'remove' run after staff edit products, so admin or staff
+ * may send them; every other action uses the saved tokens to change the
+ * Meta setup and is for administrators only (403 for staff).
  */
+const STAFF_ACTIONS = new Set(['product', 'remove']);
+
 export async function POST(request: Request) {
-    const auth = await verifyAuth(request, { requireAdmin: true });
-    if (!auth.authenticated) {
-        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
     const body = await request.json().catch(() => ({}));
+    const staffAction = STAFF_ACTIONS.has(body?.action);
+    const auth = await verifyAuth(request, { requireRole: staffAction ? ['admin', 'staff'] : 'admin' });
+    if (!auth.authenticated) {
+        return NextResponse.json(
+            {
+                success: false,
+                error: auth.user ? 'Only an administrator can change the Meta and WhatsApp setup.' : 'Unauthorized',
+            },
+            { status: auth.user ? 403 : 401 }
+        );
+    }
     try {
         switch (body?.action) {
             case 'test':

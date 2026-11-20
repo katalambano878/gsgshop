@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { absoluteMediaUrl } from '@/lib/media-url';
 
@@ -14,7 +15,9 @@ export function verifyBrainBearer(request: Request): NextResponse | null {
   }
 
   const token = auth.slice('Bearer '.length).trim();
-  if (!token || token !== expected) {
+  const a = crypto.createHash('sha256').update(token).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  if (!token || !crypto.timingSafeEqual(a, b) || token.length !== expected.length) {
     return NextResponse.json({ error: 'Invalid API key' }, { status: 403 });
   }
 
@@ -48,7 +51,11 @@ export function toSafeProduct(product: any): SafeProduct {
     description: product.description ?? null,
     price: Number(product.price ?? 0),
     category,
-    in_stock: Number(product.quantity ?? 0) > 0,
+    // Sellable-stock rule: untracked or oversell-allowed products are always in stock.
+    in_stock:
+      product.track_quantity === false ||
+      product.continue_selling === true ||
+      Number(product.quantity ?? 0) > 0,
     image_url: absoluteMediaUrl(firstImage?.url ?? null),
   };
 }
@@ -72,6 +79,8 @@ export async function fetchProductsForBrain({
       description,
       price,
       quantity,
+      track_quantity,
+      continue_selling,
       status,
       categories(name, slug),
       product_images(url, position)
@@ -81,14 +90,16 @@ export async function fetchProductsForBrain({
     .order('name', { ascending: true });
 
   if (search) {
-    query = query.ilike('name', `%${search}%`);
+    const literal = search.slice(0, 100).replace(/[\\%_]/g, (m) => `\\${m}`);
+    query = query.ilike('name', `%${literal}%`);
   }
 
   if (singleId) {
-    query = query.or(`id.eq.${singleId},slug.eq.${singleId}`);
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    query = UUID_RE.test(singleId) ? query.eq('id', singleId) : query.eq('slug', singleId.slice(0, 200));
   }
 
-  const { data, error } = await query;
+  const { data, error } = await query.limit(500);
   if (error) throw error;
 
   let rows = data ?? [];

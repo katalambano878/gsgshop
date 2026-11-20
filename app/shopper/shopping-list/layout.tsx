@@ -3,7 +3,7 @@ import { createShopperPageMetadata } from '@/lib/seo';
 export const metadata = createShopperPageMetadata({
   title: 'Create Your Shopping List',
   description:
-    'Build your shopping list and let My Personal Shopper by GSG source it at market price with 15% or less Markup. Same-day delivery across Accra and Ghana.',
+    'Build your shopping list, see your estimate and pay by Mobile Money or card. My Personal Shopper by GSG buys at the market price and delivers in Accra.',
   path: '/shopping-list',
   keywords: [
     'shopping list service Ghana',

@@ -304,6 +304,8 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
   private returnRows = false;
   private singleMode: "none" | "single" | "maybe" = "none";
   private lockRows = false;
+  /** Per-parent / total row caps for has-many embeds (set by the REST route only). */
+  private embedCap: { perParent: number; total: number } | null = null;
   private actor: RlsActor | null;
 
   constructor(table: string, actor: RlsActor | null = null) {
@@ -433,6 +435,19 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
       this.rangeTo = null;
       this.limitN = cap;
     }
+    return this;
+  }
+  /**
+   * Server-side only (not part of supabase-js): cap has-many embeds such as
+   * `order_items(*)` at `perParent` rows per parent row and `total` rows per
+   * embed, so one request cannot pull an unbounded child table. Applies to
+   * nested embeds too.
+   */
+  capEmbedRows(perParent: number, total: number) {
+    this.embedCap = {
+      perParent: Math.max(1, Math.floor(perParent)),
+      total: Math.max(1, Math.floor(total)),
+    };
     return this;
   }
   /** True when at least one row filter (eq, in, or, ...) has been applied. */
@@ -923,11 +938,30 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
           const orderBy = EMBED_TABLES_WITH_POSITION.has(embedTable)
               ? ` ORDER BY ${ident("position")} ASC NULLS LAST`
               : "";
-          const res = await pool.query(
-            `SELECT ${innerCols} FROM ${tbl(embedTable)} WHERE ${ident(fkCol)} IN (${ph})${orderBy}`,
-            parentIds
-          );
-          related = res.rows;
+          if (this.embedCap) {
+            // Number each parent's children and keep the first perParent of
+            // them (same order as without the cap), at most `total` in all.
+            const windowOrder = orderBy ? orderBy.replace(" ORDER BY ", "ORDER BY ") : "";
+            const res = await pool.query(
+              `SELECT * FROM (
+                 SELECT ${innerCols === "*" ? `${tbl(embedTable)}.*` : innerCols},
+                        row_number() OVER (PARTITION BY ${ident(fkCol)} ${windowOrder}) AS "__embed_rn"
+                   FROM ${tbl(embedTable)} WHERE ${ident(fkCol)} IN (${ph})
+               ) capped
+               WHERE "__embed_rn" <= ${this.embedCap.perParent}
+               ORDER BY "__embed_rn"
+               LIMIT ${this.embedCap.total}`,
+              parentIds
+            );
+            related = res.rows;
+            for (const r of related) delete r.__embed_rn;
+          } else {
+            const res = await pool.query(
+              `SELECT ${innerCols} FROM ${tbl(embedTable)} WHERE ${ident(fkCol)} IN (${ph})${orderBy}`,
+              parentIds
+            );
+            related = res.rows;
+          }
         }
         await this.resolveEmbeds(related, embed.select, embedTable);
         const grouped = new Map<any, Row[]>();

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import AdminOnly from '@/components/admin/AdminOnly';
 
 type Settings = {
   pixelId: string;
@@ -50,6 +51,14 @@ const fmtTime = (iso: string) =>
   new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 export default function AdminMetaPage() {
+  return (
+    <AdminOnly title="Meta & WhatsApp">
+      <AdminMetaPageInner />
+    </AdminOnly>
+  );
+}
+
+function AdminMetaPageInner() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [feedUrl, setFeedUrl] = useState('');
@@ -71,6 +80,7 @@ export default function AdminMetaPage() {
       try {
         const res = await fetch('/api/admin/meta', { headers: await authHeaders() });
         const data = await res.json();
+        if (res.status === 403) throw new Error('Only an admin can change Meta & WhatsApp settings. Ask an admin.');
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load');
         apply(data);
       } catch (err: any) {
@@ -104,7 +114,8 @@ export default function AdminMetaPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save');
+      if (res.status === 403) throw new Error('Only an admin can change Meta & WhatsApp settings. Ask an admin.');
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save');
       apply(data);
       setChecks(null);
       setMessage({
@@ -137,7 +148,8 @@ export default function AdminMetaPage() {
         setChecks(data.checks);
         return;
       }
-      if (!res.ok || !data.success) throw new Error(data.error || 'Meta request failed');
+      if (res.status === 403) throw new Error('Only an admin can change Meta & WhatsApp settings. Ask an admin.');
+        if (!res.ok || !data.success) throw new Error(data.error || 'Meta request failed');
       if (action === 'whatsapp') {
         setMessage({
           type: 'success',

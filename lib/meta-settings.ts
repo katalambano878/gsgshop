@@ -6,11 +6,14 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
  * Admin → Meta & WhatsApp. Server-only: import it from API routes, never from
  * a client component.
  *
- * Stored in site_settings under META_SETTINGS_KEY. site_settings is publicly
- * readable (RLS), so the access tokens are AES-256-GCM encrypted with a key
- * derived from SUPABASE_SERVICE_ROLE_KEY, which only the server has. The
+ * Stored in site_settings under META_SETTINGS_KEY (that row is staff-only
+ * under RLS). The access tokens are AES-256-GCM encrypted with a key derived
+ * from META_SETTINGS_ENC_KEY, a secret only this app has. Tokens saved before
+ * that key existed were encrypted with a key derived from
+ * SUPABASE_SERVICE_ROLE_KEY (which the GSG AI agent also holds): they are
+ * still read, and re-encrypted with the new key on the next save. The
  * plaintext tokens never leave the server; the admin page only sees the last
- * four characters.
+ * four characters, and public routes see neither.
  *
  * Meta issues separate tokens for the catalogue (Pixel, catalogue, feeds) and
  * for WhatsApp (WhatsApp Business account, phone number), so there are two.
@@ -69,10 +72,33 @@ export type MetaSettingsView = Omit<MetaSettings, 'accessToken' | 'whatsappToken
 
 const digits = (v: unknown) => String(v ?? '').replace(/\D/g, '');
 
-function encryptionKey(): Buffer {
+/** Key from META_SETTINGS_ENC_KEY (any long random string), or null when it is not set. */
+function currentKey(): Buffer | null {
+    const secret = (process.env.META_SETTINGS_ENC_KEY || '').trim();
+    if (!secret) return null;
+    return createHash('sha256').update(`meta-integration-v2:${secret}`).digest();
+}
+
+/** The old key, derived from the service key. Read-only fallback for tokens saved before. */
+function legacyKey(): Buffer | null {
     const secret = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!secret) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set');
+    if (!secret) return null;
     return createHash('sha256').update(`meta-integration:${secret}`).digest();
+}
+
+let warnedNoKey = false;
+
+/** The key new tokens are encrypted with: META_SETTINGS_ENC_KEY, else (with a warning) the old one. */
+function encryptionKey(): Buffer {
+    const key = currentKey();
+    if (key) return key;
+    if (!warnedNoKey) {
+        warnedNoKey = true;
+        console.warn('[meta-settings] META_SETTINGS_ENC_KEY is not set: Meta tokens are encrypted with the old service-key-derived key');
+    }
+    const legacy = legacyKey();
+    if (!legacy) throw new Error('META_SETTINGS_ENC_KEY is not set');
+    return legacy;
 }
 
 function encrypt(plain: string): string {
@@ -82,18 +108,40 @@ function encrypt(plain: string): string {
     return ['v1', iv.toString('base64'), cipher.getAuthTag().toString('base64'), data.toString('base64')].join(':');
 }
 
-function decrypt(payload: string | undefined): string {
-    if (!payload) return '';
+function decryptWith(key: Buffer, payload: string): string | null {
     try {
         const [version, iv, tag, data] = payload.split(':');
-        if (version !== 'v1') return '';
-        const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv, 'base64'));
+        if (version !== 'v1' || !iv || !tag || !data) return null;
+        const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
         decipher.setAuthTag(Buffer.from(tag, 'base64'));
         return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
     } catch {
-        // Key rotated or data tampered with: treat as "no token saved".
-        return '';
+        return null;
     }
+}
+
+/**
+ * Decrypt a saved token: the new key first, then the old one. `legacy` is
+ * true when only the old key worked (re-encrypt it on the next save).
+ */
+function decryptToken(payload: string | undefined): { plain: string; legacy: boolean } {
+    if (!payload) return { plain: '', legacy: false };
+    const key = currentKey();
+    if (key) {
+        const plain = decryptWith(key, payload);
+        if (plain !== null) return { plain, legacy: false };
+    }
+    const old = legacyKey();
+    if (old) {
+        const plain = decryptWith(old, payload);
+        if (plain !== null) return { plain, legacy: Boolean(key) };
+    }
+    // Key rotated or data tampered with: treat as "no token saved".
+    return { plain: '', legacy: false };
+}
+
+function decrypt(payload: string | undefined): string {
+    return decryptToken(payload).plain;
 }
 
 async function readStored(): Promise<StoredMetaSettings> {
@@ -171,6 +219,12 @@ export async function saveMetaSettings(input: {
         autoSync: input.autoSync !== undefined ? Boolean(input.autoSync) : current.autoSync,
         updatedAt: new Date().toISOString(),
     };
+    // Tokens still under the old service-key-derived key move to
+    // META_SETTINGS_ENC_KEY now (when it is set).
+    for (const field of ['accessTokenEnc', 'whatsappTokenEnc'] as const) {
+        const saved = decryptToken(current[field]);
+        if (saved.legacy && saved.plain) next[field] = encrypt(saved.plain);
+    }
     if (input.accessToken === null) {
         delete next.accessTokenEnc;
         delete next.tokenLast4;

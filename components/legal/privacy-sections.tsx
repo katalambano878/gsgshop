@@ -180,7 +180,7 @@ export const PRIVACY_SECTIONS: LegalSection[] = [
           bound to keep it confidential:
         </p>
         <ul>
-          <li><strong>Service providers and processors</strong> — for payment, hosting, mapping, SMS, email, analytics, and support tooling, under contracts that require confidentiality and limited use.</li>
+          <li><strong>Service providers and processors</strong> — for payment (Moolre for Mobile Money, Paystack for cards), hosting, mapping, SMS and WhatsApp messaging, analytics, and support tooling, under contracts that require confidentiality and limited use.</li>
           <li><strong>Courier partners and riders</strong> — for delivery, pickup, and field support.</li>
           <li><strong>Vendors and shoppers</strong> — where required to fulfil your order (for example, sharing your delivery address with the assigned shopper).</li>
           <li><strong>Escrow counterparties</strong> — limited identity and order detail necessary to operate Sell-Safe Buy-Safe.</li>
@@ -327,8 +327,8 @@ export const PRIVACY_SECTIONS: LegalSection[] = [
     body: (
       <p>
         We may update this Privacy Policy from time to time. Where the changes
-        are material, we will notify you (for example, by email, banner, or
-        in-app notice) before they take effect.
+        are material, we will notify you (for example, by SMS, WhatsApp, or a
+        notice on our platforms) before they take effect.
       </p>
     ),
   },

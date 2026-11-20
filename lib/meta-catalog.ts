@@ -13,7 +13,7 @@ import { absoluteMediaUrl } from '@/lib/media-url';
  */
 
 export const META_PRODUCT_SELECT =
-    'id, name, slug, status, description, seo_description, price, quantity, continue_selling, sku, brand, categories(name), product_images(url, position), product_variants(price, quantity)';
+    'id, name, slug, status, description, seo_description, price, quantity, track_quantity, continue_selling, sku, brand, categories(name), product_images(url, position), product_variants(price, quantity)';
 
 export type MetaSourceProduct = {
     id: string;
@@ -24,6 +24,7 @@ export type MetaSourceProduct = {
     seo_description: string | null;
     price: number;
     quantity: number;
+    track_quantity?: boolean | null;
     continue_selling: boolean | null;
     sku: string | null;
     brand: string | null;
@@ -81,7 +82,8 @@ export function toMetaItem(p: MetaSourceProduct): MetaItem | null {
             price,
             categoryName: category,
         }).slice(0, 5000),
-        availability: stock > 0 || p.continue_selling ? 'in stock' : 'out of stock',
+        // Sellable rule: untracked stock or continue-selling is always available.
+        availability: p.track_quantity === false || p.continue_selling || stock > 0 ? 'in stock' : 'out of stock',
         condition: 'new',
         price: `${price.toFixed(2)} GHS`,
         link: absoluteUrl(`/product/${p.slug}`),

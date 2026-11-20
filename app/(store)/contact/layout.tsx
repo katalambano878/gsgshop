@@ -3,7 +3,7 @@ import { createPageMetadata } from '@/lib/seo';
 export const metadata = createPageMetadata({
   title: 'Contact Us',
   description:
-    'Get in touch with GSG Convenience Goods & More. WhatsApp, phone, email and location in Accra, Ghana. We are here to help with orders, delivery and support.',
+    'Contact GSG Convenience Goods & More in Accra by WhatsApp, phone or the contact form. Help with orders, delivery, pickup and payment.',
   path: '/contact',
   keywords: ['contact GSG Ghana', 'customer support Accra', 'GSG phone number'],
 });

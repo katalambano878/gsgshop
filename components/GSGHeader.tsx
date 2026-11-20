@@ -23,7 +23,6 @@ const FALLBACK_CATEGORIES = [
   { label: 'Household Essentials', href: '/shop?category=household-essentials', children: [] },
   { label: 'Personal Care', href: '/shop?category=personal-care', children: [] },
   { label: 'Stationery & Office', href: '/shop?category=stationery', children: [] },
-  { label: 'Gift Cards', href: '/gift-card', children: [] },
 ];
 
 const FEATURED_NAV_ITEMS = [
@@ -78,6 +77,14 @@ export default function GSGHeader() {
     });
     supabase.auth.getSession().then(({ data: { session } }) => setUser(session?.user ?? null));
 
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMegaMenuOpen(false);
+        setMobileMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 10);
       if (window.scrollY > 50) setMegaMenuOpen(false);
@@ -121,6 +128,7 @@ export default function GSGHeader() {
     return () => {
       subscription.unsubscribe();
       window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('keydown', handleKey);
     };
   }, []);
 
@@ -134,23 +142,25 @@ export default function GSGHeader() {
   return (
     <>
       {/* Top Utility Bar */}
-      <div className="bg-gsg-purple-dark text-white text-xs py-2 hidden md:block">
+      <div className="bg-gsg-purple-dark text-white text-xs py-2 hidden md:block print:hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
           <div className="flex gap-4">
-            <span>Welcome to GSG Brands MainHome</span>
-            <span className="text-white/40">|</span>
-            <a href="tel:+233246033792" className="hover:text-gsg-accent transition-colors">Call: +233 (0) 246 033 792</a>
+            <span>Groceries and everyday goods in Accra</span>
+            <span className="text-white/40" aria-hidden="true">|</span>
+            <a href="tel:+233246033792" className="hover:text-gsg-accent transition-colors">Call or WhatsApp: +233 24 603 3792</a>
           </div>
           <div className="flex gap-4">
             <Link href="/help" className="hover:text-gsg-accent transition-colors">Help Center</Link>
             <span className="text-white/40">|</span>
-            <Link href="/shipping" className="hover:text-gsg-accent transition-colors">Shipping & Returns</Link>
+            <Link href="/shipping" className="hover:text-gsg-accent transition-colors">Delivery</Link>
+            <span className="text-white/40" aria-hidden="true">|</span>
+            <Link href="/returns" className="hover:text-gsg-accent transition-colors">Returns</Link>
           </div>
         </div>
       </div>
 
       {/* Main Header */}
-      <header className={`bg-white sticky top-0 z-50 transition-shadow duration-300 ${isScrolled ? 'shadow-md' : 'border-b border-gray-100'}`}>
+      <header className={`bg-white sticky top-0 z-50 transition-shadow duration-300 print:hidden ${isScrolled ? 'shadow-md' : 'border-b border-gray-100'}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="py-4 flex items-center justify-between gap-4 md:gap-8">
             {/* Logo */}
@@ -159,10 +169,13 @@ export default function GSGHeader() {
                 type="button" 
                 className="lg:hidden text-gsg-black p-1"
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                aria-label="Open menu"
+                aria-expanded={mobileMenuOpen}
+                aria-controls="mobile-menu"
               >
-                <i className="ri-menu-line text-2xl" />
+                <i className="ri-menu-line text-2xl" aria-hidden="true" />
               </button>
-              <Link href="/" className="flex items-center group">
+              <Link href="/" className="flex items-center group" aria-label="GSG Convenience Goods & More, home">
                 <div className="flex flex-col">
                   <div className="relative w-[68px] h-[24px] md:w-[90px] md:h-[30px]">
                     <Image src="/fgfg.png" alt="GSG Wordmark" fill className="object-contain object-left" />
@@ -175,7 +188,9 @@ export default function GSGHeader() {
             {/* Search Bar - Desktop */}
             <div className="hidden md:flex flex-1 max-w-2xl">
               <form onSubmit={handleSearch} className="w-full relative group">
+                <label htmlFor="header-search" className="sr-only">Search products</label>
                 <input
+                  id="header-search"
                   type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -187,7 +202,7 @@ export default function GSGHeader() {
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-gsg-purple text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-gsg-purple-dark transition-colors shadow-sm"
                   aria-label="Search"
                 >
-                  <i className="ri-search-line text-sm" />
+                  <i className="ri-search-line text-sm" aria-hidden="true" />
                 </button>
               </form>
             </div>
@@ -197,9 +212,12 @@ export default function GSGHeader() {
               <button 
                 type="button"
                 className="md:hidden p-2 text-gsg-black"
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)} // Reusing mobile menu for search on mobile for now or add separate search toggle
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                aria-label="Search products"
+                aria-expanded={mobileMenuOpen}
+                aria-controls="mobile-menu"
               >
-                <i className="ri-search-line text-xl" />
+                <i className="ri-search-line text-xl" aria-hidden="true" />
               </button>
 
               <Link href={user ? '/account' : '/auth/login'} className="hidden md:flex flex-col items-center group">
@@ -220,6 +238,8 @@ export default function GSGHeader() {
                 type="button"
                 className="flex flex-col items-center group relative"
                 onClick={() => setIsCartOpen(!isCartOpen)}
+                aria-label={cartCount > 0 ? `Open cart, ${cartCount} item${cartCount === 1 ? '' : 's'}` : 'Open cart'}
+                aria-expanded={isCartOpen}
               >
                 <div className="relative p-1">
                   <i className="ri-shopping-bag-line text-2xl text-gray-600 group-hover:text-gsg-purple transition-colors" />
@@ -238,18 +258,20 @@ export default function GSGHeader() {
         <div className="hidden lg:flex items-center justify-between border-t border-gray-100">
           <nav className="flex items-center h-full">
             <div className="relative h-full flex items-center">
-              <div
-                onClick={() => setMegaMenuOpen(!megaMenuOpen)}
-                className="w-[260px] flex items-center justify-between bg-gsg-purple text-white px-4 py-3.5 font-bold cursor-pointer hover:bg-gsg-purple-dark transition-colors rounded-t-sm"
-              >
-                <div className="flex items-center gap-2 text-sm">
-                  <i className={`${megaMenuOpen ? 'ri-close-line' : 'ri-layout-grid-fill'} text-lg`} />
+              <div className="w-[260px] flex items-center justify-between bg-gsg-purple text-white font-bold hover:bg-gsg-purple-dark transition-colors rounded-t-sm">
+                <button
+                  type="button"
+                  onClick={() => setMegaMenuOpen(!megaMenuOpen)}
+                  aria-expanded={megaMenuOpen}
+                  aria-controls="categories-menu"
+                  className="flex-1 flex items-center gap-2 text-sm px-4 py-3.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+                >
+                  <i className={`${megaMenuOpen ? 'ri-close-line' : 'ri-layout-grid-fill'} text-lg`} aria-hidden="true" />
                   <span>Categories</span>
-                </div>
-                <Link 
-                  href="/categories" 
-                  onClick={(e) => e.stopPropagation()} 
-                  className="text-xs font-semibold text-white/80 hover:text-white transition-colors"
+                </button>
+                <Link
+                  href="/categories"
+                  className="text-xs font-semibold text-white/80 hover:text-white transition-colors px-4 py-3.5"
                 >
                   See all
                 </Link>
@@ -289,8 +311,8 @@ export default function GSGHeader() {
         {/* Mega Menu Dropdown - Full Width */}
         {megaMenuOpen && (
           <>
-            <div className="fixed inset-0 bg-black/30 z-40 top-[125px]" onClick={() => setMegaMenuOpen(false)} />
-            <div className="hidden lg:block absolute left-0 right-0 bg-white border-t border-gray-100 shadow-2xl z-50 animate-fade-in-up">
+            <div className="fixed inset-0 bg-black/30 z-40 top-[125px]" onClick={() => setMegaMenuOpen(false)} aria-hidden="true" />
+            <div id="categories-menu" className="hidden lg:block absolute left-0 right-0 bg-white border-t border-gray-100 shadow-2xl z-50 animate-fade-in-up">
               <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
                 <div className="grid grid-cols-5 gap-8">
                   {categories.map((cat) => (
@@ -369,20 +391,22 @@ export default function GSGHeader() {
 
         {/* Mobile Menu Overlay */}
         {mobileMenuOpen && (
-          <div className="fixed inset-0 z-50 lg:hidden">
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileMenuOpen(false)} />
+          <div id="mobile-menu" className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />
             <div className="absolute top-0 left-0 bottom-0 w-[80%] max-w-sm bg-white shadow-xl flex flex-col">
               <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gsg-purple text-white">
                 <span className="font-bold text-lg">Menu</span>
-                <button onClick={() => setMobileMenuOpen(false)} className="p-2 hover:bg-white/10 rounded-full">
-                  <i className="ri-close-line text-2xl" />
+                <button type="button" onClick={() => setMobileMenuOpen(false)} className="p-2 hover:bg-white/10 rounded-full" aria-label="Close menu">
+                  <i className="ri-close-line text-2xl" aria-hidden="true" />
                 </button>
               </div>
               
               <div className="p-4 border-b border-gray-100">
                 <form onSubmit={(e) => { handleSearch(e); setMobileMenuOpen(false); }}>
                   <div className="relative">
+                    <label htmlFor="mobile-search" className="sr-only">Search products</label>
                     <input
+                      id="mobile-search"
                       type="search"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
@@ -438,6 +462,8 @@ export default function GSGHeader() {
                           <button
                             type="button"
                             onClick={() => toggleCategory(cat.label)}
+                            aria-expanded={expandedCategories.has(cat.label)}
+                            aria-label={`${expandedCategories.has(cat.label) ? 'Hide' : 'Show'} ${cat.label} subcategories`}
                             className="px-4 py-3 text-gray-400 hover:text-gsg-purple transition-colors"
                           >
                             <i className={`ri-arrow-${expandedCategories.has(cat.label) ? 'down' : 'right'}-s-line text-lg transition-transform`} />

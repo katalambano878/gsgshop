@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useState, useEffect, useRef, Suspense } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import ProductCard, { type ColorVariant } from '@/components/ProductCard';
 import ProductCardSkeleton from '@/components/skeletons/ProductCardSkeleton';
@@ -9,37 +9,56 @@ import { getColorHex } from '@/components/ProductCard';
 import { supabase } from '@/lib/supabase';
 import { cachedQuery } from '@/lib/query-cache';
 import PageHero from '@/components/PageHero';
+import { isPurchasable, sellableStock, stockCount } from '@/context/stock';
+
+const NO_IMAGE =
+  "data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Crect width=%27100%27 height=%27100%27 fill=%27%23f3f4f6%27/%3E%3C/svg%3E";
+const SORTS = ['new', 'price-low', 'price-high'] as const;
 
 function ShopContent() {
   usePageTitle('Shop All Products');
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
 
   // State
   const [products, setProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([{ id: 'all', name: 'All Products', count: 0 }]);
   const [categoriesLoaded, setCategoriesLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
   const [totalProducts, setTotalProducts] = useState(0);
+  const requestRef = useRef(0);
 
-  // Filters
-  const [selectedCategory, setSelectedCategory] = useState('all');
+  // Category, search and sort always come from the URL, so the header search,
+  // category links and "Shop All" each show exactly what they say.
+  const selectedCategory = searchParams.get('category') || 'all';
+  const search = (searchParams.get('search') || '').trim();
+  const rawSort = searchParams.get('sort') || 'new';
+  const sortBy = (SORTS as readonly string[]).includes(rawSort) ? rawSort : 'new';
+
   const [priceRange, setPriceRange] = useState([0, 5000]);
-  const [selectedRating, setSelectedRating] = useState(0);
-  const [sortBy, setSortBy] = useState('popular');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [page, setPage] = useState(1);
   const productsPerPage = 9;
 
-  // Initialize from URL params
+  // A new category, search or sort starts again at page 1.
   useEffect(() => {
-    const category = searchParams.get('category');
-    const sort = searchParams.get('sort');
-    const search = searchParams.get('search');
+    setPage(1);
+  }, [selectedCategory, search, sortBy]);
 
-    if (category) setSelectedCategory(category);
-    if (sort) setSortBy(sort);
-    // Search is handled in the fetch function via searchParams directly or we could add a state for it
-  }, [searchParams]);
+  const updateUrl = (changes: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams.toString());
+    for (const [key, value] of Object.entries(changes)) {
+      if (value === null || value === '' || (key === 'category' && value === 'all')) next.delete(key);
+      else next.set(key, value);
+    }
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+  const setSelectedCategory = (slug: string) => updateUrl({ category: slug });
+  const setSortBy = (value: string) => updateUrl({ sort: value === 'new' ? null : value });
 
   // Fetch Categories from cached API
   useEffect(() => {
@@ -68,13 +87,13 @@ function ShopContent() {
     // early would either miss the filter or cache an incorrect result.
     if (selectedCategory !== 'all' && !categoriesLoaded) return;
 
+    const requestId = ++requestRef.current;
     async function fetchProducts() {
       setLoading(true);
+      setLoadError(false);
       try {
-        const search = searchParams.get('search');
-
         // Build cache key from all filter params
-        const cacheKey = `shop:${selectedCategory}:${search || ''}:${priceRange.join('-')}:${selectedRating}:${sortBy}:${page}`;
+        const cacheKey = `shop:${selectedCategory}:${search}:${priceRange.join('-')}:${sortBy}:${page}`;
 
         const { data, count, error } = await cachedQuery<{ data: any; count: any; error: any }>(
           cacheKey,
@@ -82,11 +101,12 @@ function ShopContent() {
             let query = supabase
               .from('products')
               .select(`
-                *,
+                id, name, slug, price, compare_at_price, quantity, track_quantity, continue_selling, status, moq,
                 categories!inner(name, slug),
                 product_images!product_id(url, position),
                 product_variants(id, name, price, quantity, option1, option2, image_url)
               `, { count: 'exact' })
+              .eq('status', 'active')
               .order('position', { foreignTable: 'product_images', ascending: true });
 
             // Search
@@ -125,11 +145,6 @@ function ShopContent() {
               query = query.gte('price', priceRange[0]).lte('price', priceRange[1]);
             }
 
-            // Rating Filter
-            if (selectedRating > 0) {
-              query = query.gte('rating_avg', selectedRating);
-            }
-
             // Sorting
             switch (sortBy) {
               case 'price-low':
@@ -138,13 +153,7 @@ function ShopContent() {
               case 'price-high':
                 query = query.order('price', { ascending: false });
                 break;
-              case 'rating':
-                query = query.order('rating_avg', { ascending: false });
-                break;
               case 'new':
-                query = query.order('created_at', { ascending: false });
-                break;
-              case 'popular':
               default:
                 query = query.order('created_at', { ascending: false });
                 break;
@@ -160,6 +169,7 @@ function ShopContent() {
           2 * 60 * 1000 // Cache for 2 minutes
         );
 
+        if (requestId !== requestRef.current) return;
         if (error) throw error;
 
         if (data) {
@@ -167,8 +177,6 @@ function ShopContent() {
             const variants = p.product_variants || [];
             const hasVariants = variants.length > 0;
             const minVariantPrice = hasVariants ? Math.min(...variants.map((v: any) => v.price || p.price)) : undefined;
-            const totalVariantStock = hasVariants ? variants.reduce((sum: number, v: any) => sum + (v.quantity || 0), 0) : 0;
-            const effectiveStock = hasVariants ? totalVariantStock : p.quantity;
             // Extract unique colors from option2
             const colorVariants: ColorVariant[] = [];
             const seenColors = new Set<string>();
@@ -188,13 +196,11 @@ function ShopContent() {
               slug: p.slug,       // Slug for navigation
               name: p.name,
               price: p.price,
-              originalPrice: p.compare_at_price,
-              image: p.product_images?.[0]?.url || 'https://via.placeholder.com/800x800?text=No+Image',
-              rating: p.rating_avg || 0,
-              reviewCount: 0, // Need to implement reviews relation
-              badge: p.compare_at_price > p.price ? 'Sale' : undefined, // Simple badge logic
-              inStock: effectiveStock > 0,
-              maxStock: effectiveStock || 50,
+              originalPrice: p.compare_at_price > p.price ? p.compare_at_price : undefined,
+              image: p.product_images?.[0]?.url || NO_IMAGE,
+              badge: p.compare_at_price > p.price ? 'Sale' : undefined,
+              inStock: isPurchasable(p, variants),
+              maxStock: sellableStock(stockCount(p, variants), p),
               moq: p.moq || 1,
               category: p.categories?.name,
               hasVariants,
@@ -206,16 +212,21 @@ function ShopContent() {
           setTotalProducts(count || 0);
         }
       } catch (err) {
+        if (requestId !== requestRef.current) return;
         console.error('Error fetching products:', err);
+        setLoadError(true);
+        setProducts([]);
       } finally {
-        setLoading(false);
+        if (requestId === requestRef.current) setLoading(false);
       }
     }
 
     fetchProducts();
-  }, [selectedCategory, priceRange, selectedRating, sortBy, page, searchParams, categoriesLoaded, categories]);
+  }, [selectedCategory, search, priceRange, sortBy, page, categoriesLoaded, categories, retryKey]);
 
   const totalPages = Math.ceil(totalProducts / productsPerPage);
+  const firstShown = totalProducts === 0 ? 0 : (page - 1) * productsPerPage + 1;
+  const lastShown = Math.min(totalProducts, (page - 1) * productsPerPage + products.length);
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -228,13 +239,15 @@ function ShopContent() {
       <div className="lg:hidden bg-white border-b border-gray-200 py-4 px-4 sticky top-[72px] z-20 shadow-sm">
         <div className="flex justify-between items-center">
           <button
+            type="button"
             onClick={() => setIsFilterOpen(!isFilterOpen)}
+            aria-expanded={isFilterOpen}
             className="flex items-center space-x-2 text-gsg-black font-medium"
           >
-            <i className="ri-filter-3-line text-xl text-gsg-purple"></i>
+            <i className="ri-filter-3-line text-xl text-gsg-purple" aria-hidden="true"></i>
             <span>Filters & Sort</span>
           </button>
-          <span className="text-sm text-gray-500">{totalProducts} Products</span>
+          <span className="text-sm text-gray-500">{loadError ? '' : `${totalProducts} ${totalProducts === 1 ? 'product' : 'products'}`}</span>
         </div>
       </div>
 
@@ -247,10 +260,12 @@ function ShopContent() {
                   <div className="flex items-center justify-between mb-6 lg:hidden">
                     <h2 className="text-xl font-bold text-gsg-black">Filters</h2>
                     <button
+                      type="button"
                       onClick={() => setIsFilterOpen(false)}
+                      aria-label="Close filters"
                       className="w-10 h-10 flex items-center justify-center text-gray-700 hover:bg-gray-100 rounded-full"
                     >
-                      <i className="ri-close-line text-2xl"></i>
+                      <i className="ri-close-line text-2xl" aria-hidden="true"></i>
                     </button>
                   </div>
 
@@ -265,7 +280,6 @@ function ShopContent() {
                         <button
                           onClick={() => {
                             setSelectedCategory('all');
-                            setPage(1);
                             setIsFilterOpen(false);
                           }}
                           className={`w-full text-left px-4 py-2.5 rounded-lg transition-all ${selectedCategory === 'all'
@@ -287,7 +301,6 @@ function ShopContent() {
                               <button
                                 onClick={() => {
                                   setSelectedCategory(parent.slug);
-                                  setPage(1);
                                 }}
                                 className={`w-full text-left px-4 py-2.5 rounded-lg transition-all flex justify-between items-center ${isSelected
                                   ? 'bg-gsg-purple/10 text-gsg-purple font-bold'
@@ -305,7 +318,6 @@ function ShopContent() {
                                       key={child.id}
                                       onClick={() => {
                                         setSelectedCategory(child.slug);
-                                        setPage(1);
                                         setIsFilterOpen(false);
                                       }}
                                       className={`w-full text-left px-4 py-2 rounded-lg text-sm transition-all ${selectedCategory === child.slug
@@ -335,7 +347,9 @@ function ShopContent() {
                           <span>GH₵0</span>
                           <span>GH₵{priceRange[1]}</span>
                         </div>
+                        <label htmlFor="shop-price-max" className="sr-only">Maximum price</label>
                         <input
+                          id="shop-price-max"
                           type="range"
                           min="0"
                           max="5000"
@@ -347,41 +361,6 @@ function ShopContent() {
                           }}
                           className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-gsg-purple"
                         />
-                      </div>
-                    </div>
-
-                    {/* Rating */}
-                    <div className="border-t border-gray-100 pt-8">
-                      <h3 className="font-bold text-gsg-black mb-4 flex items-center gap-2">
-                        <i className="ri-star-smile-line text-gsg-purple"></i>
-                        Rating
-                      </h3>
-                      <div className="space-y-2">
-                        {[4, 3, 2, 1].map(rating => (
-                          <button
-                            key={rating}
-                            onClick={() => {
-                              setSelectedRating(rating === selectedRating ? 0 : rating);
-                              setPage(1);
-                            }}
-                            className={`w-full text-left px-4 py-2 rounded-lg transition-all ${selectedRating === rating
-                              ? 'bg-orange-50 border border-orange-100'
-                              : 'hover:bg-gray-50'
-                              }`}
-                          >
-                            <div className="flex items-center space-x-2">
-                              <div className="flex">
-                                {[1, 2, 3, 4, 5].map(star => (
-                                  <i
-                                    key={star}
-                                    className={`${star <= rating ? 'ri-star-fill text-orange-400' : 'ri-star-line text-gray-300'} text-lg`}
-                                  ></i>
-                                ))}
-                              </div>
-                              <span className="text-sm font-medium text-gray-600">& Up</span>
-                            </div>
-                          </button>
-                        ))}
                       </div>
                     </div>
 
@@ -398,26 +377,30 @@ function ShopContent() {
 
             <div className="flex-1">
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <p className="text-gray-600 font-medium">
-                  Showing <span className="text-gsg-black font-bold">{products.length}</span> results
+                <p className="text-gray-600 font-medium" aria-live="polite">
+                  {loading
+                    ? 'Loading products…'
+                    : loadError
+                      ? 'Products could not be loaded'
+                      : totalProducts === 0
+                        ? 'No products found'
+                        : <>Showing <span className="text-gsg-black font-bold">{firstShown}–{lastShown}</span> of <span className="text-gsg-black font-bold">{totalProducts}</span> {totalProducts === 1 ? 'product' : 'products'}{search ? <> for &ldquo;{search}&rdquo;</> : null}</>}
                 </p>
 
                 <div className="flex items-center space-x-3 w-full sm:w-auto">
-                  <label className="text-sm text-gray-500 whitespace-nowrap hidden sm:block">Sort by:</label>
+                  <label htmlFor="shop-sort" className="text-sm text-gray-500 whitespace-nowrap hidden sm:block">Sort by:</label>
                   <div className="relative w-full sm:w-48">
                     <select
+                      id="shop-sort"
                       value={sortBy}
                       onChange={(e) => {
                         setSortBy(e.target.value);
-                        setPage(1);
                       }}
                       className="w-full appearance-none px-4 py-2.5 pr-10 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple text-sm font-medium text-gsg-black cursor-pointer transition-all hover:bg-white"
                     >
-                      <option value="popular">Most Popular</option>
                       <option value="new">Newest Arrivals</option>
                       <option value="price-low">Price: Low to High</option>
                       <option value="price-high">Price: High to Low</option>
-                      <option value="rating">Highest Rated</option>
                     </select>
                     <i className="ri-arrow-down-s-line absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none"></i>
                   </div>
@@ -429,6 +412,18 @@ function ShopContent() {
                   {[...Array(6)].map((_, i) => (
                     <ProductCardSkeleton key={i} />
                   ))}
+                </div>
+              ) : loadError ? (
+                <div className="text-center py-24 bg-white rounded-3xl border border-dashed border-red-200" role="alert">
+                  <h3 className="text-2xl font-bold text-gsg-black mb-3">We couldn&apos;t load products</h3>
+                  <p className="text-gray-500 mb-8 max-w-md mx-auto">Check your connection and try again.</p>
+                  <button
+                    type="button"
+                    onClick={() => setRetryKey((k) => k + 1)}
+                    className="inline-flex items-center bg-gsg-purple hover:bg-gsg-purple-dark text-white px-8 py-3.5 rounded-full font-bold transition-all shadow-lg"
+                  >
+                    Retry
+                  </button>
                 </div>
               ) : (
                 <>
@@ -448,11 +443,11 @@ function ShopContent() {
                       <h3 className="text-2xl font-bold text-gsg-black mb-3">No Products Found</h3>
                       <p className="text-gray-500 mb-8 max-w-md mx-auto">We couldn't find any products matching your criteria. Try adjusting your filters or search term.</p>
                       <button
+                        type="button"
                         onClick={() => {
-                          setSelectedCategory('all');
                           setPriceRange([0, 5000]);
-                          setSelectedRating(0);
                           setPage(1);
+                          router.replace(pathname, { scroll: false });
                         }}
                         className="inline-flex items-center bg-gsg-purple hover:bg-gsg-purple-dark text-white px-8 py-3.5 rounded-full font-bold transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5"
                       >
@@ -466,13 +461,15 @@ function ShopContent() {
               {/* Pagination */}
               {totalPages > 1 && (
                 <div className="mt-16 flex justify-center">
-                  <div className="flex items-center bg-white rounded-full shadow-sm border border-gray-100 p-1">
+                  <nav className="flex items-center bg-white rounded-full shadow-sm border border-gray-100 p-1" aria-label="Pagination">
                     <button
+                      type="button"
                       onClick={() => setPage(p => Math.max(1, p - 1))}
                       disabled={page === 1}
+                      aria-label="Previous page"
                       className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-gsg-black"
                     >
-                      <i className="ri-arrow-left-s-line text-xl"></i>
+                      <i className="ri-arrow-left-s-line text-xl" aria-hidden="true"></i>
                     </button>
 
                     <span className="px-6 font-bold text-gsg-purple">
@@ -480,13 +477,15 @@ function ShopContent() {
                     </span>
 
                     <button
+                      type="button"
                       onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                       disabled={page === totalPages}
+                      aria-label="Next page"
                       className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-gsg-black"
                     >
-                      <i className="ri-arrow-right-s-line text-xl"></i>
+                      <i className="ri-arrow-right-s-line text-xl" aria-hidden="true"></i>
                     </button>
-                  </div>
+                  </nav>
                 </div>
               )}
             </div>

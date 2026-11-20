@@ -3,7 +3,39 @@
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { isPlaceholderEmail } from '@/lib/placeholder-email';
 import ProductSalesStats from './ProductSalesStats';
+import { downloadCsv, csvMoney } from '@/lib/csv';
+
+/** Payment states that mean money was taken (now or before a refund). */
+const SETTLED_PAYMENT = ['paid', 'refunded', 'partially_refunded'];
+const CLOSED_STATUSES = ['cancelled', 'refunded'];
+
+/** Confirmed tab: paid (or since refunded), plus anything cancelled/refunded. */
+function isConfirmedOrder(o: { payment_status: string; status: string }) {
+  return SETTLED_PAYMENT.includes(o.payment_status) || CLOSED_STATUSES.includes(o.status);
+}
+
+/** Abandoned cart: payment pending or failed, and the order never moved past checkout. */
+function isAbandonedOrder(o: { payment_status: string; status: string }) {
+  return ['pending', 'failed'].includes(o.payment_status) && ['pending', 'awaiting_payment'].includes(o.status);
+}
+
+/** Forward order of the fulfilment steps; bulk changes only ever move an order forward. */
+const STATUS_RANK: Record<string, number> = { pending: 0, awaiting_payment: 0, processing: 1, shipped: 2, delivered: 3 };
+
+/** An unpaid, still-open order that staff may mark as paid (cash/transfer received). */
+function canMarkPaid(o: { payment_status: string; status: string }) {
+  return (o.payment_status === 'pending' || o.payment_status === 'failed') && !CLOSED_STATUSES.includes(o.status);
+}
+
+/** Local calendar day (YYYY-MM-DD) of a timestamp, for the date-range filter. */
+function localDay(iso: string) {
+  const d = new Date(iso);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
 
 interface Order {
   id: string;
@@ -50,13 +82,26 @@ export default function AdminOrdersPage() {
     { label: 'Processing', count: 0, status: 'processing' },
     { label: 'Packaged', count: 0, status: 'shipped' },
     { label: 'Delivered', count: 0, status: 'delivered' },
-    { label: 'Cancelled', count: 0, status: 'cancelled' }
+    { label: 'Cancelled', count: 0, status: 'cancelled' },
+    { label: 'Refunded', count: 0, status: 'refunded' }
   ]);
   const [abandonedCount, setAbandonedCount] = useState(0);
   const [confirmedCount, setConfirmedCount] = useState(0);
   const [showProductStats, setShowProductStats] = useState(false);
   const [productFilter, setProductFilter] = useState('all');
   const [availableProducts, setAvailableProducts] = useState<string[]>([]);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState('all');
+  const [shippingMethodFilter, setShippingMethodFilter] = useState('all');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
+  const [dbTotal, setDbTotal] = useState<number | null>(null);
+
+  // Hidden rows must never stay selected: any tab or filter change clears the selection.
+  useEffect(() => {
+    setSelectedOrders([]);
+  }, [orderViewTab, statusFilter, searchQuery, productFilter, dateFrom, dateTo, paymentMethodFilter, shippingMethodFilter]);
 
   useEffect(() => {
     fetchOrders();
@@ -66,10 +111,13 @@ export default function AdminOrdersPage() {
     try {
       setLoading(true);
 
-      // Fetch orders with related data
-      const { data: ordersData, error } = await supabase
-        .from('orders')
-        .select(`
+      // Page through every order: the API caps a single select at 1000 rows.
+      const PAGE = 1000;
+      const ordersData: any[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data: page, error } = await supabase
+          .from('orders')
+          .select(`
           id,
           order_number,
           email,
@@ -87,11 +135,20 @@ export default function AdminOrdersPage() {
             product_name
           )
         `)
-        .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        ordersData.push(...(page || []));
+        if (!page || page.length < PAGE) break;
+      }
 
-      if (error) throw error;
+      setOrders(ordersData);
 
-      setOrders(ordersData || []);
+      // Exact row count from the database, so "Showing X of Y" can prove nothing is missing.
+      const { count, error: countError } = await supabase
+        .from('orders')
+        .select('id', { count: 'exact', head: true });
+      setDbTotal(countError ? null : count ?? null);
 
       // Extract unique product names for filter
       const productNames = new Set<string>();
@@ -102,9 +159,9 @@ export default function AdminOrdersPage() {
       });
       setAvailableProducts(Array.from(productNames).sort());
 
-      // Separate confirmed (paid) from abandoned (pending payment)
-      const confirmedOrders = ordersData?.filter(o => o.payment_status === 'paid') || [];
-      const abandonedOrders = ordersData?.filter(o => o.payment_status !== 'paid') || [];
+      // Confirmed = paid (or refunded / cancelled); abandoned = unpaid and still open.
+      const confirmedOrders = ordersData.filter(isConfirmedOrder);
+      const abandonedOrders = ordersData.filter(isAbandonedOrder);
       
       setConfirmedCount(confirmedOrders.length);
       setAbandonedCount(abandonedOrders.length);
@@ -116,7 +173,8 @@ export default function AdminOrdersPage() {
         { label: 'Processing', count: confirmedOrders.filter(o => o.status === 'processing').length, status: 'processing' },
         { label: 'Packaged', count: confirmedOrders.filter(o => o.status === 'shipped').length, status: 'shipped' },
         { label: 'Delivered', count: confirmedOrders.filter(o => o.status === 'delivered').length, status: 'delivered' },
-        { label: 'Cancelled', count: confirmedOrders.filter(o => o.status === 'cancelled').length, status: 'cancelled' }
+        { label: 'Cancelled', count: confirmedOrders.filter(o => o.status === 'cancelled').length, status: 'cancelled' },
+        { label: 'Refunded', count: confirmedOrders.filter(o => o.status === 'refunded').length, status: 'refunded' }
       ];
       setOrderStats(stats);
 
@@ -133,12 +191,13 @@ export default function AdminOrdersPage() {
     'shipped': 'bg-purple-100 text-purple-700 border-purple-200',
     'delivered': 'bg-blue-100 text-blue-700 border-blue-200',
     'cancelled': 'bg-red-100 text-red-700 border-red-200',
+    'refunded': 'bg-purple-100 text-purple-700 border-purple-200',
     'awaiting_payment': 'bg-gray-100 text-gray-700 border-gray-200'
   };
 
   const formatStatus = (status: string) => {
     if (status === 'shipped') return 'Packaged';
-    return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown';
+    return status ? (status.charAt(0).toUpperCase() + status.slice(1)).replace(/_/g, ' ') : 'Unknown';
   };
 
   const getCustomerName = (order: Order) => {
@@ -156,15 +215,17 @@ export default function AdminOrdersPage() {
       return `${first} ${last}`.trim();
     }
     if (order.profiles?.full_name) return order.profiles.full_name;
-    if (order.email) {
+    if (order.email && !isPlaceholderEmail(order.email)) {
       const name = order.email.split('@')[0];
       return name.charAt(0).toUpperCase() + name.slice(1);
     }
     return 'Guest';
   };
 
+  /** Real email only: placeholder addresses (till, WhatsApp, no-email checkout) are not contact details. */
   const getCustomerEmail = (order: Order) => {
-    return order.email || order.profiles?.email || 'N/A';
+    const email = order.email || order.profiles?.email || '';
+    return email && !isPlaceholderEmail(email) ? email : '';
   };
 
   const getCustomerAvatar = (order: Order) => {
@@ -183,7 +244,7 @@ export default function AdminOrdersPage() {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
+    return date.toLocaleDateString('en-GB', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -194,7 +255,7 @@ export default function AdminOrdersPage() {
   };
 
   const handleSelectAll = () => {
-    if (selectedOrders.length === filteredOrders.length) {
+    if (filteredOrders.length > 0 && filteredOrders.every((o) => selectedOrders.includes(o.id))) {
       setSelectedOrders([]);
     } else {
       setSelectedOrders(filteredOrders.map(o => o.id));
@@ -209,74 +270,162 @@ export default function AdminOrdersPage() {
     }
   };
 
+  const ORDER_CSV_HEADERS = ['Order ID', 'Customer', 'Email', 'Phone', 'Date', 'Items', 'Total (GHS)', 'Status', 'Payment Status', 'Payment Method', 'Shipping Method'];
+  const orderCsvRow = (o: Order) => [
+    o.order_number || o.id,
+    getCustomerName(o),
+    getCustomerEmail(o),
+    o.phone || o.shipping_address?.phone || '',
+    formatDate(o.created_at),
+    getItemCount(o),
+    csvMoney(o.total),
+    o.status,
+    o.payment_status,
+    o.payment_method || '',
+    o.shipping_method || '',
+  ];
+
+  /** Selected orders that are still visible under the current tab and filters. */
+  const visibleSelected = () => {
+    const visible = new Set(filteredOrders.map((o) => o.id));
+    return orders.filter((o) => selectedOrders.includes(o.id) && visible.has(o.id));
+  };
+
+  const getAuthToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token;
+  };
+
   const handleBulkAction = async (action: string, newStatus?: string) => {
     if (newStatus) {
+      const targets = visibleSelected();
+      if (targets.length === 0) return;
+      // Only paid, open orders move forward. Unpaid (abandoned) orders are never
+      // packed or announced to the customer, and cancelled/refunded ones are not reopened.
+      const eligible = targets.filter(
+        (o) =>
+          o.payment_status === 'paid' &&
+          !CLOSED_STATUSES.includes(o.status) &&
+          (STATUS_RANK[o.status] ?? 99) < (STATUS_RANK[newStatus] ?? -1)
+      );
+      const unpaid = targets.filter((o) => o.payment_status !== 'paid').length;
+      const skippedOther = targets.length - eligible.length - unpaid;
+      if (eligible.length === 0) {
+        alert(
+          unpaid > 0
+            ? `None of the selected orders can be marked ${formatStatus(newStatus)}: ${unpaid} ${unpaid === 1 ? 'is' : 'are'} not paid. Mark an order as paid first.`
+            : `None of the selected orders can be marked ${formatStatus(newStatus)} (already at or past that step, or cancelled/refunded).`
+        );
+        return;
+      }
+      const confirmMsg =
+        `Mark ${eligible.length} order${eligible.length === 1 ? '' : 's'} as ${formatStatus(newStatus)}? Each customer will be notified.` +
+        (unpaid ? `\n${unpaid} unpaid order${unpaid === 1 ? '' : 's'} will be skipped.` : '') +
+        (skippedOther ? `\n${skippedOther} already at or past that step, or cancelled/refunded, will be skipped.` : '');
+      if (!confirm(confirmMsg)) return;
+
+      setBulkBusy(true);
+      const updated: Order[] = [];
+      const failed: string[] = [];
       try {
-        const { error } = await supabase
-          .from('orders')
-          .update({ status: newStatus })
-          .in('id', selectedOrders);
+        const { data: { user } } = await supabase.auth.getUser();
+        for (const o of eligible) {
+          // Guard on the status we saw, so a change made elsewhere meanwhile is not overwritten.
+          const { data: changed, error: upErr } = await supabase
+            .from('orders')
+            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .eq('id', o.id)
+            .eq('payment_status', 'paid')
+            .eq('status', o.status)
+            .select('id');
+          if (upErr || !changed || changed.length === 0) { failed.push(o.order_number || o.id); continue; }
+          updated.push(o);
+          const { error: histErr } = await supabase.from('order_status_history').insert({
+            order_id: o.id,
+            status: newStatus,
+            notes: `Bulk status change from ${o.status || 'unknown'}`,
+            created_by: user?.id ?? null,
+          });
+          if (histErr) console.error('Status history insert failed', histErr);
+        }
 
-        if (error) throw error;
-
-
-
-        // Send Notifications with auth token
-        const { data: { session } } = await supabase.auth.getSession();
-        const authToken = session?.access_token;
-        
-        const updatedOrders = orders.filter(o => selectedOrders.includes(o.id));
-        updatedOrders.forEach(order => {
-          fetch('/api/notifications', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              ...(authToken && { 'Authorization': `Bearer ${authToken}` })
-            },
-            body: JSON.stringify({
-              type: 'order_updated',
-              payload: { order, status: newStatus }
-            })
-          }).catch(err => console.error('Notification error', err));
-        });
+        // Notify only the orders whose status actually changed, one at a time so
+        // a failure (for example the notification rate limit) is counted, not lost.
+        const authToken = await getAuthToken();
+        let notifyFailed = 0;
+        for (const order of updated) {
+          try {
+            const res = await fetch('/api/notifications', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(authToken && { 'Authorization': `Bearer ${authToken}` })
+              },
+              body: JSON.stringify({
+                type: 'order_updated',
+                payload: { order: { ...order, status: newStatus }, status: newStatus }
+              })
+            });
+            if (!res.ok) notifyFailed++;
+          } catch (err) {
+            console.error('Notification error', err);
+            notifyFailed++;
+          }
+        }
 
         await fetchOrders();
         setSelectedOrders([]);
-        alert(`${selectedOrders.length} orders updated to ${newStatus}`);
+        const skipped = targets.length - eligible.length;
+        alert(
+          `${updated.length} order${updated.length === 1 ? '' : 's'} updated to ${formatStatus(newStatus)}.` +
+            (skipped ? `\n${skipped} skipped (not allowed in their current state).` : '') +
+            (failed.length ? `\n${failed.length} not changed (changed elsewhere or failed): ${failed.join(', ')}` : '') +
+            (notifyFailed ? `\n${notifyFailed} customer notification${notifyFailed === 1 ? '' : 's'} could not be sent.` : '')
+        );
       } catch (error) {
         console.error('Error updating orders:', error);
         alert('Failed to update orders');
+      } finally {
+        setBulkBusy(false);
       }
     } else if (action === 'Export') {
-      const ordersToExport = orders.filter(o => selectedOrders.includes(o.id));
-      const csvContent = `Order ID,Customer,Email,Date,Items,Total,Status,Payment\n${ordersToExport.map(o =>
-        `${o.order_number || o.id},${getCustomerName(o)},${getCustomerEmail(o)},${formatDate(o.created_at)},${getItemCount(o)},${o.total},${o.status},${o.payment_method || 'N/A'}`
-      ).join('\n')}`;
-      const blob = new Blob([csvContent], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'selected-orders.csv';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+      downloadCsv('selected-orders.csv', ORDER_CSV_HEADERS, visibleSelected().map(orderCsvRow));
+    }
+  };
+
+  /** Staff confirms money was received (cash, transfer, MoMo seen on the phone). */
+  const handleMarkPaid = async (order: Order) => {
+    const ok = confirm(
+      `Mark order ${order.order_number} (GH₵ ${Number(order.total || 0).toFixed(2)}) as PAID?\n\n` +
+        'Only do this if you have received the money. Stock is taken for the items and the order moves to Confirmed Orders.'
+    );
+    if (!ok) return;
+    setMarkingPaid(order.id);
+    try {
+      const authToken = await getAuthToken();
+      const res = await fetch('/api/admin/orders/mark-paid', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken && { Authorization: `Bearer ${authToken}` }),
+        },
+        body: JSON.stringify({ orderNumber: order.order_number }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body?.success === false) throw new Error(body?.error || body?.message || `Request failed (${res.status})`);
+      await fetchOrders();
+      alert(`Order ${order.order_number} marked as paid.`);
+    } catch (error: any) {
+      console.error('Mark paid failed:', error);
+      alert(`Could not mark the order as paid: ${error?.message || 'unknown error'}`);
+    } finally {
+      setMarkingPaid(null);
     }
   };
 
   const handleExportAll = () => {
-    const csvContent = `Order ID,Customer,Email,Date,Items,Total,Status,Payment\n${orders.map(o =>
-      `${o.order_number || o.id},${getCustomerName(o)},${getCustomerEmail(o)},${formatDate(o.created_at)},${getItemCount(o)},${o.total},${o.status},${o.payment_method || 'N/A'}`
-    ).join('\n')}`;
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'all-orders.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+    const tabName = orderViewTab === 'abandoned' ? 'abandoned-carts' : 'orders';
+    downloadCsv(`${tabName}-${new Date().toISOString().slice(0, 10)}.csv`, ORDER_CSV_HEADERS, filteredOrders.map(orderCsvRow));
   };
 
   const handlePrintInvoice = (orderId: string) => {
@@ -286,21 +435,25 @@ export default function AdminOrdersPage() {
   const handleResendPaymentLink = async (order: Order) => {
     setSendingPaymentLink(order.id);
     try {
+      const authToken = await getAuthToken();
       const response = await fetch('/api/notifications', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken && { Authorization: `Bearer ${authToken}` })
+        },
         body: JSON.stringify({
           type: 'payment_link',
           payload: order
         })
       });
-      
-      if (!response.ok) throw new Error('Failed to send');
-      
-      alert(`Payment link sent to ${order.phone || order.email}`);
-    } catch (error) {
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body?.success === false) throw new Error(body?.error || body?.message || 'Failed to send');
+
+      alert(`Payment link sent to ${order.phone || order.shipping_address?.phone || 'the customer'}`);
+    } catch (error: any) {
       console.error('Error sending payment link:', error);
-      alert('Failed to send payment link');
+      alert(`Failed to send payment link: ${error?.message || 'unknown error'}`);
     } finally {
       setSendingPaymentLink(null);
     }
@@ -312,8 +465,7 @@ export default function AdminOrdersPage() {
     const orderId = (order.order_number || order.id).toLowerCase();
 
     // First filter by view tab (confirmed vs abandoned)
-    const isConfirmed = order.payment_status === 'paid';
-    const matchesViewTab = orderViewTab === 'confirmed' ? isConfirmed : !isConfirmed;
+    const matchesViewTab = orderViewTab === 'confirmed' ? isConfirmedOrder(order) : isAbandonedOrder(order);
 
     const matchesSearch = orderId.includes(searchQuery.toLowerCase()) ||
       customerName.includes(searchQuery.toLowerCase()) ||
@@ -321,8 +473,30 @@ export default function AdminOrdersPage() {
     const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
     const matchesProduct = productFilter === 'all' || 
       order.order_items?.some((item: any) => item.product_name === productFilter);
-    return matchesViewTab && matchesSearch && matchesStatus && matchesProduct;
+    const day = order.created_at ? localDay(order.created_at) : '';
+    const matchesDate = (!dateFrom || day >= dateFrom) && (!dateTo || day <= dateTo);
+    const matchesPaymentMethod = paymentMethodFilter === 'all' || (order.payment_method || '') === paymentMethodFilter;
+    const matchesShipping = shippingMethodFilter === 'all' || (order.shipping_method || '') === shippingMethodFilter;
+    return matchesViewTab && matchesSearch && matchesStatus && matchesProduct &&
+      matchesDate && matchesPaymentMethod && matchesShipping;
+  }).sort((a, b) => {
+    switch (sortBy) {
+      case 'total':
+        return (b.total || 0) - (a.total || 0);
+      case 'customer':
+        return getCustomerName(a).localeCompare(getCustomerName(b));
+      case 'status':
+        return (a.status || '').localeCompare(b.status || '');
+      case 'date':
+      default:
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    }
   });
+
+  const distinct = (values: (string | undefined | null)[]) =>
+    Array.from(new Set(values.filter((v): v is string => !!v))).sort();
+  const paymentMethods = distinct(orders.map((o) => o.payment_method));
+  const shippingMethods = distinct(orders.map((o) => o.shipping_method));
 
   return (
     <div className="space-y-6">
@@ -344,7 +518,7 @@ export default function AdminOrdersPage() {
             className="flex-1 md:flex-none bg-blue-700 hover:bg-blue-800 text-white px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap cursor-pointer shadow-sm flex items-center justify-center"
           >
             <i className="ri-download-line mr-2"></i>
-            Export
+            Export ({filteredOrders.length})
           </button>
         </div>
       </div>
@@ -456,29 +630,39 @@ export default function AdminOrdersPage() {
           </div>
 
           {showFilters && (
-            <div className="mt-4 p-4 bg-gray-50 rounded-lg grid md:grid-cols-3 gap-4">
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg grid md:grid-cols-4 gap-4">
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Date Range</label>
-                <input type="date" className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-sm" />
+                <label className="block text-sm font-semibold text-gray-700 mb-2">From</label>
+                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">To</label>
+                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-sm" />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Payment Method</label>
-                <select className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
-                  <option>All Methods</option>
-                  <option>Moolre</option>
-                  <option>Mobile Money</option>
-                  <option>Card</option>
+                <select value={paymentMethodFilter} onChange={(e) => setPaymentMethodFilter(e.target.value)} className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
+                  <option value="all">All Methods</option>
+                  {paymentMethods.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Shipping Method</label>
-                <select className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
-                  <option>All Methods</option>
-                  <option>Standard</option>
-                  <option>Express</option>
-                  <option>Store Pickup</option>
+                <select value={shippingMethodFilter} onChange={(e) => setShippingMethodFilter(e.target.value)} className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
+                  <option value="all">All Methods</option>
+                  {shippingMethods.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </div>
+              {(dateFrom || dateTo || paymentMethodFilter !== 'all' || shippingMethodFilter !== 'all') && (
+                <div className="md:col-span-4">
+                  <button
+                    onClick={() => { setDateFrom(''); setDateTo(''); setPaymentMethodFilter('all'); setShippingMethodFilter('all'); }}
+                    className="text-sm font-medium text-gray-900 hover:underline cursor-pointer"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -486,21 +670,27 @@ export default function AdminOrdersPage() {
         {selectedOrders.length > 0 && (
           <div className="p-4 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
             <p className="text-blue-800 font-semibold">
-              {selectedOrders.length} order{selectedOrders.length > 1 ? 's' : ''} selected
+              {visibleSelected().length} order{visibleSelected().length === 1 ? '' : 's'} selected
             </p>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => handleBulkAction('Mark as Processing', 'processing')}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer"
-              >
-                Mark Processing
-              </button>
-              <button
-                onClick={() => handleBulkAction('Mark as Packaged', 'shipped')}
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer"
-              >
-                Mark Packaged
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {orderViewTab === 'confirmed' && (
+                <>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => handleBulkAction('Mark as Processing', 'processing')}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50"
+                  >
+                    Mark Processing
+                  </button>
+                  <button
+                    disabled={bulkBusy}
+                    onClick={() => handleBulkAction('Mark as Packaged', 'shipped')}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50"
+                  >
+                    Mark Packaged
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => handleBulkAction('Export')}
                 className="px-4 py-2 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer"
@@ -519,7 +709,8 @@ export default function AdminOrdersPage() {
                 <th className="py-4 px-6">
                   <input
                     type="checkbox"
-                    checked={selectedOrders.length === filteredOrders.length && filteredOrders.length > 0}
+                    aria-label="Select all visible orders"
+                    checked={filteredOrders.length > 0 && filteredOrders.every((o) => selectedOrders.includes(o.id))}
                     onChange={handleSelectAll}
                     className="w-4 h-4 text-blue-700 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
                   />
@@ -556,6 +747,7 @@ export default function AdminOrdersPage() {
                     <td className="py-4 px-6">
                       <input
                         type="checkbox"
+                        aria-label={`Select order ${order.order_number}`}
                         checked={selectedOrders.includes(order.id)}
                         onChange={() => handleSelectOrder(order.id)}
                         className="w-4 h-4 text-blue-700 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
@@ -573,7 +765,7 @@ export default function AdminOrdersPage() {
                         </div>
                         <div>
                           <p className="font-medium text-gray-900 whitespace-nowrap">{getCustomerName(order)}</p>
-                          <p className="text-sm text-gray-500">{getCustomerEmail(order)}</p>
+                          <p className="text-sm text-gray-500">{getCustomerEmail(order) || order.phone || order.shipping_address?.phone || ''}</p>
                         </div>
                       </div>
                     </td>
@@ -583,9 +775,9 @@ export default function AdminOrdersPage() {
                     <td className="py-4 px-4 text-sm whitespace-nowrap">
                       <div className="flex flex-col">
                         <span className="text-gray-700">{order.payment_method || 'N/A'}</span>
-                        {orderViewTab === 'abandoned' && (
-                          <span className={`text-xs mt-1 ${order.payment_status === 'failed' ? 'text-red-600' : 'text-amber-600'}`}>
-                            {order.payment_status === 'failed' ? 'Failed' : 'Pending'}
+                        {order.payment_status !== 'paid' && (
+                          <span className={`text-xs mt-1 capitalize ${order.payment_status === 'failed' ? 'text-red-600' : order.payment_status === 'refunded' || order.payment_status === 'partially_refunded' ? 'text-purple-600' : 'text-amber-600'}`}>
+                            {(order.payment_status || 'pending').replace(/_/g, ' ')}
                           </span>
                         )}
                       </div>
@@ -601,15 +793,17 @@ export default function AdminOrdersPage() {
                           href={`/admin/orders/${order.id}`}
                           className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                           title="View Order"
+                          aria-label={`View order ${order.order_number}`}
                         >
                           <i className="ri-eye-line text-lg w-4 h-4 flex items-center justify-center"></i>
                         </Link>
-                        {orderViewTab === 'abandoned' && order.payment_status !== 'paid' && (
+                        {orderViewTab === 'abandoned' && isAbandonedOrder(order) && (
                           <button
                             onClick={() => handleResendPaymentLink(order)}
                             disabled={sendingPaymentLink === order.id}
                             className="w-8 h-8 flex items-center justify-center text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                             title="Resend Payment Link"
+                            aria-label={`Resend payment link for order ${order.order_number}`}
                           >
                             {sendingPaymentLink === order.id ? (
                               <i className="ri-loader-4-line text-lg w-4 h-4 flex items-center justify-center animate-spin"></i>
@@ -618,10 +812,26 @@ export default function AdminOrdersPage() {
                             )}
                           </button>
                         )}
+                        {canMarkPaid(order) && (
+                          <button
+                            onClick={() => handleMarkPaid(order)}
+                            disabled={markingPaid === order.id}
+                            className="w-8 h-8 flex items-center justify-center text-green-700 hover:text-green-800 hover:bg-green-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                            title="Mark as paid"
+                            aria-label={`Mark order ${order.order_number} as paid`}
+                          >
+                            {markingPaid === order.id ? (
+                              <i className="ri-loader-4-line text-lg w-4 h-4 flex items-center justify-center animate-spin"></i>
+                            ) : (
+                              <i className="ri-money-dollar-circle-line text-lg w-4 h-4 flex items-center justify-center"></i>
+                            )}
+                          </button>
+                        )}
                         <button
                           onClick={() => handlePrintInvoice(order.id)}
                           className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                           title="Print Invoice"
+                          aria-label={`Print invoice for order ${order.order_number}`}
                         >
                           <i className="ri-printer-line text-lg w-4 h-4 flex items-center justify-center"></i>
                         </button>
@@ -636,7 +846,12 @@ export default function AdminOrdersPage() {
 
         {filteredOrders.length > 0 && (
           <div className="p-6 border-t border-gray-200 flex items-center justify-between">
-            <p className="text-gray-600">Showing {filteredOrders.length} of {orders.length} orders</p>
+            <p className="text-gray-600">
+              Showing {filteredOrders.length} of {orders.length} orders
+              {dbTotal !== null && dbTotal !== orders.length && (
+                <span className="text-amber-700"> ({dbTotal} in the database: refresh to load the rest)</span>
+              )}
+            </p>
           </div>
         )}
       </div>

@@ -19,24 +19,30 @@ export async function GET() {
   const supabase = createServerSupabase('anon');
   const { data: products } = await supabase
     .from('products')
-    .select('name, slug, price, quantity, categories(name)')
+    .select('name, slug, price, quantity, track_quantity, continue_selling, product_variants(quantity), categories(name)')
     .eq('status', 'active')
     .gt('price', 0)
     .order('name');
   const productLines = (products || [])
     .map((p: any) => {
       const cat = (Array.isArray(p.categories) ? p.categories[0] : p.categories) as { name: string } | null;
-      const stock = p.quantity > 0 ? 'in stock' : 'out of stock';
+      const variants: { quantity: number | null }[] = Array.isArray(p.product_variants) ? p.product_variants : [];
+      const available = variants.length > 0
+        ? variants.some((v) => (Number(v.quantity) || 0) > 0)
+        : (Number(p.quantity) || 0) > 0;
+      const sellable = p.track_quantity === false || p.continue_selling === true || available;
+      const stock = sellable ? 'available' : 'out of stock';
       return `- ${p.name.trim()}: GH₵${Number(p.price).toFixed(2)}, ${stock}${cat?.name ? `, ${cat.name.trim()}` : ''} (${goods}/product/${p.slug})`;
     })
     .join('\n');
 
   const body = `# GSG Convenience Goods & More
 
-> GSG Convenience Goods & More is a Ghanaian online convenience store delivering
-> groceries, household essentials, personal care, stationery, phones, electronics
-> and fashion across Accra and nationwide. It also operates a Personal Shopper
-> service that sources any item at market price with a markup of 15% or less (currently ${shopperMarkupPct}%).
+> GSG Convenience Goods & More is an online convenience store in Accra, Ghana,
+> selling groceries, household essentials and personal-care goods, with pickup
+> or delivery in and around Accra (other regions via an Accra transport station).
+> It also runs a Personal Shopper service that buys items at the market for a
+> markup on the item subtotal (currently ${shopperMarkupPct}%).
 
 ## About
 - Name: GSG Convenience Goods & More
@@ -44,8 +50,11 @@ export async function GET() {
 - City: Accra
 - Storefront: ${goods}
 - Personal Shopper: ${shopper}
-- Payments: Mobile Money (MTN, Telecel, AirtelTigo) and Visa/Mastercard
-- Delivery: Free Delivery (daily), Sole Express, Joint Express, Pickup (daily)
+- Payments: Mobile Money (MTN, Telecel Cash, AirtelTigo) through Moolre, and cards (Visa, Mastercard, Verve) through Paystack. No cash on delivery, no bank transfer.
+- Phone / WhatsApp: +233 24 603 3792 (second line +233 57 903 3792)
+- Hours: Mon–Fri 05:00–14:00, Saturday and public holidays 05:00–09:00
+- Updates: by SMS and WhatsApp
+- Delivery: Pickup (free), Free Delivery (daily), Sole Express, Joint Express, Add to Personal Shopper
 
 ## Storefront (${goods})
 - Home: ${goods}
@@ -56,8 +65,8 @@ export async function GET() {
 - Shipping & delivery: ${goods}/shipping
 - Returns & refunds: ${goods}/returns
 - FAQ: ${goods}/faqs
+- Help centre: ${goods}/help
 - Blog: ${goods}/blog
-- Gift cards: ${goods}/gift-card
 
 ## Personal Shopper (${shopper})
 - Home: ${shopper}
@@ -68,8 +77,10 @@ export async function GET() {
 - Customer experience: ${shopper}/customer-experience
 
 ## Key facts
-- Personal Shopper markup: 15% or less on the item subtotal (currently ${shopperMarkupPct}%), no hidden fees.
-- Delivery fee is calculated from road distance and shown at checkout before payment. Pickup is free.
+- Personal Shopper: the customer pays the estimate (items, markup of currently ${shopperMarkupPct}%, delivery) when submitting the list; any difference after market pricing is settled with staff on WhatsApp.
+- Delivery fee is calculated from distance and shown at checkout before payment. Pickup is free.
+- Outside Greater Accra, orders are delivered to an Accra transport station; the onward fare is paid to the transport company.
+- Problems with an order must be reported within 24 hours of delivery (returns form or WhatsApp, with photos).
 - Fresh/perishable items must use Sole Express or Joint Express.
 - Free Delivery runs daily after confirmation. Distance and order total set the fee: the more you buy, the further it's free; beyond the free km you only pay the extra distance.
 

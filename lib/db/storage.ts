@@ -55,13 +55,15 @@ const IMAGE_TYPES = new Set([
   "image/x-icon",
   "image/vnd.microsoft.icon",
 ]);
-const VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/ogg", "video/quicktime", "video/x-msvideo"]);
 const DOCUMENT_TYPES = new Set(["application/pdf"]);
 
-/** Upload size caps. Product videos run to ~40 MB. */
+/** Upload size caps. Only images and PDFs may be uploaded. */
 export const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
-export const MAX_VIDEO_BYTES = 60 * 1024 * 1024;
 export const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
+/** The largest upload of any kind (for refusing a body before reading it). */
+export const MAX_UPLOAD_BYTES = Math.max(MAX_IMAGE_BYTES, MAX_DOCUMENT_BYTES);
+/** @deprecated videos are no longer accepted; kept so old imports still compile. */
+export const MAX_VIDEO_BYTES = MAX_UPLOAD_BYTES;
 
 function baseType(contentType: string | null | undefined): string {
   return String(contentType || "").split(";")[0].trim().toLowerCase();
@@ -71,14 +73,13 @@ function baseType(contentType: string | null | undefined): string {
 export function uploadLimitFor(contentType: string | null | undefined): number | null {
   const type = baseType(contentType);
   if (IMAGE_TYPES.has(type)) return MAX_IMAGE_BYTES;
-  if (VIDEO_TYPES.has(type)) return MAX_VIDEO_BYTES;
   if (DOCUMENT_TYPES.has(type)) return MAX_DOCUMENT_BYTES;
   return null;
 }
 
 /**
  * The type to record for an upload: the uploader's type when it is an
- * allowed image/video/PDF type, else the type its file extension implies
+ * allowed image or PDF type, else the type its file extension implies
  * (supabase-js sends Blobs without a type as application/octet-stream).
  * Null when neither is allowed.
  */
@@ -90,28 +91,26 @@ export function acceptedUploadType(objectPath: string, contentType: string | nul
 }
 
 /**
- * Response headers for serving a stored object. Only allowed image/video/PDF
- * types are served inline; anything else is forced to download, so an
- * uploaded HTML file can never run script on the store's origin. Every object
- * gets nosniff and a sandbox CSP (covers SVG opened directly).
+ * Response headers for serving a stored object.
+ * - Raster images: inline with their own type and nosniff.
+ * - SVG: inline, but under a sandbox CSP so script inside one never runs on
+ *   this origin (also when opened directly).
+ * - PDFs and everything else (videos uploaded before, unknown types): always
+ *   a download (`Content-Disposition: attachment`) under a sandbox CSP, so
+ *   nothing but an image ever renders on the store's origin.
  */
 export function objectResponseHeaders(contentType: string): Record<string, string> {
   const type = baseType(contentType);
-  const headers: Record<string, string> = {
-    "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
-  };
-  if (DOCUMENT_TYPES.has(type)) {
-    // Browsers' PDF viewers refuse to open under a sandbox CSP; PDF script
-    // runs in the viewer, not on this origin.
-    delete headers["Content-Security-Policy"];
+  const sandbox = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox";
+  const headers: Record<string, string> = { "X-Content-Type-Options": "nosniff" };
+  if (IMAGE_TYPES.has(type)) {
     headers["Content-Type"] = type;
-  } else if (uploadLimitFor(type) !== null) {
-    headers["Content-Type"] = type;
-  } else {
-    headers["Content-Type"] = "application/octet-stream";
-    headers["Content-Disposition"] = "attachment";
+    if (type === "image/svg+xml") headers["Content-Security-Policy"] = sandbox;
+    return headers;
   }
+  headers["Content-Security-Policy"] = sandbox;
+  headers["Content-Disposition"] = "attachment";
+  headers["Content-Type"] = DOCUMENT_TYPES.has(type) ? type : "application/octet-stream";
   return headers;
 }
 
@@ -217,7 +216,7 @@ interface BucketApi {
     objectPath: string,
     data: ArrayBuffer | Uint8Array | Buffer | Blob,
     opts?: { contentType?: string; upsert?: boolean }
-  ): Promise<{ data: { path: string } | null; error: { message: string } | null }>;
+  ): Promise<{ data: { path: string } | null; error: { message: string; statusCode?: string } | null }>;
   createSignedUrl(
     objectPath: string,
     expiresIn: number
@@ -247,7 +246,20 @@ export function createStorageClient(): StorageClient {
             } else {
               buf = Buffer.from(data as any);
             }
-            await fs.writeFile(full, buf);
+            if (opts?.upsert) {
+              await fs.writeFile(full, buf);
+            } else {
+              // Supabase semantics: without upsert an existing object is
+              // never replaced ("wx" fails when the file exists).
+              try {
+                await fs.writeFile(full, buf, { flag: "wx" });
+              } catch (e: any) {
+                if (e?.code === "EEXIST") {
+                  return { data: null, error: { message: "The resource already exists", statusCode: "409" } };
+                }
+                throw e;
+              }
+            }
             if (opts?.contentType) {
               await fs.writeFile(
                 full + ".meta.json",

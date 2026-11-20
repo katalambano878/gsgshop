@@ -1,28 +1,25 @@
 import Link from 'next/link';
+import { createPageMetadata } from '@/lib/seo';
+
+export const metadata = createPageMetadata({
+  title: 'Referral rewards not available',
+  description: 'GSG Convenience Goods & More does not run a referral programme.',
+  path: '/referral-rewards',
+  noindex: true,
+});
 
 export default function ReferralRewardsPage() {
   return (
-    <div className="min-h-screen bg-white">
-      <div className="bg-gsg-purple-light/20 py-12">
-        <div className="max-w-3xl mx-auto px-4 text-center">
-          <h1 className="text-3xl md:text-4xl font-bold text-gsg-black mb-4">Referral Rewards</h1>
-          <p className="text-gray-600">
-            Invite friends to GSG Convenience Goods & More and earn rewards when they shop.
-          </p>
-        </div>
-      </div>
-      <div className="max-w-2xl mx-auto px-4 py-12">
-        <div className="bg-white border border-gray-200 rounded-card p-8 text-center">
-          <p className="text-gray-600 mb-6">
-            Referral program details and your unique link will be available here. Check back soon or contact support.
-          </p>
-          <Link
-            href="/account"
-            className="inline-block bg-gsg-purple hover:bg-gsg-purple-dark text-white px-6 py-3 rounded-pill font-medium"
-          >
-            Back to Account
-          </Link>
-        </div>
+    <div className="min-h-[60vh] bg-white flex items-center justify-center px-4 py-16">
+      <div className="max-w-xl w-full bg-white border border-gray-200 rounded-card p-10 text-center">
+        <h1 className="text-2xl font-bold text-gsg-black mb-3">Referral rewards are not available</h1>
+        <p className="text-gray-600 mb-8">We do not run a referral or rewards programme.</p>
+        <Link
+          href="/shop"
+          className="inline-block bg-gsg-purple hover:bg-gsg-purple-dark text-white px-6 py-3 rounded-pill font-medium"
+        >
+          Continue Shopping
+        </Link>
       </div>
     </div>
   );

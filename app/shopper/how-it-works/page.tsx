@@ -1,11 +1,14 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import ShopperMarkup from '@/components/ShopperMarkup';
 import { createShopperPageMetadata } from '@/lib/seo';
+import { REFUND_NOTE } from '../_lib/copy';
 
 export const metadata = createShopperPageMetadata({
   title: 'How It Works',
   description:
-    'See how My Personal Shopper by GSG works — create your list, we source at market price with 15% or less Markup, then deliver to your door in Ghana.',
+    'See how My Personal Shopper by GSG works: create your list, pay the estimate, and we buy at the market price and deliver to your door in Accra.',
   path: '/how-it-works',
   keywords: [
     'how personal shopper works Ghana',
@@ -14,7 +17,7 @@ export const metadata = createShopperPageMetadata({
   ],
 });
 
-const STEPS = [
+const STEPS: Array<{ id: string; title: string; icon: string; content: ReactNode }> = [
   {
     id: '01',
     title: 'Create Your List',
@@ -24,24 +27,27 @@ const STEPS = [
   },
   {
     id: '02',
-    title: 'We Source at Market Price',
-    icon: 'ri-store-2-line',
-    content:
-      'After submission, our team reviews your list and starts sourcing. We buy at the exact source market price with no hidden markups on the goods.',
+    title: 'Transparent Fees',
+    icon: 'ri-percent-line',
+    content: (
+      <>
+        Your estimate is the item prices, plus a <ShopperMarkup /> markup on the item subtotal, plus a delivery fee
+        based on distance. If a rare sourcing fee is needed, we always agree it with you first.
+      </>
+    ),
   },
   {
     id: '03',
-    title: 'Transparent Fees',
-    icon: 'ri-percent-line',
-    content:
-      'We charge a 15% or less Markup on item subtotal. Delivery fee is based on distance. If a rare sourcing fee is needed, we always agree with you first.',
+    title: 'Pay the Estimate',
+    icon: 'ri-secure-payment-line',
+    content: `When you send your list you see the estimate and pay it securely by Mobile Money or card. ${REFUND_NOTE}`,
   },
   {
     id: '04',
-    title: 'Pay & Schedule Delivery',
-    icon: 'ri-secure-payment-line',
+    title: 'We Shop & Deliver',
+    icon: 'ri-store-2-line',
     content:
-      'Once totals are confirmed, you pay securely online. Your personal shopper buys the items and delivers to your preferred location and time.',
+      'Our team buys your items at the market price and delivers to your preferred location and time. If the market prices differ from your estimate, our staff settle the difference with you on WhatsApp.',
   },
 ];
 
@@ -52,7 +58,7 @@ export default function HowItWorks() {
         <div className="absolute inset-0 z-0">
           <Image
             src="/shopper/shopper_image_8.webp"
-            alt="How It Works Background"
+            alt=""
             fill
             className="object-cover"
             priority

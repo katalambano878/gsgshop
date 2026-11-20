@@ -3,7 +3,7 @@ import { createShopperPageMetadata } from '@/lib/seo';
 export const metadata = createShopperPageMetadata({
   title: 'Customer Experience',
   description:
-    'See how My Personal Shopper by GSG delivers a premium customer experience — transparent pricing, WhatsApp updates and reliable delivery across Ghana.',
+    'Contact My Personal Shopper by GSG: phone and WhatsApp numbers, email and support hours.',
   path: '/customer-experience',
 });
 

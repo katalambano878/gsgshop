@@ -5,17 +5,12 @@ import Link from 'next/link';
 
 export default function PWASettingsPage() {
   const [isInstalled, setIsInstalled] = useState(false);
-  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const [storageUsage, setStorageUsage] = useState({ used: 0, quota: 0 });
   const [cacheSize, setCacheSize] = useState(0);
 
   useEffect(() => {
     if (window.matchMedia('(display-mode: standalone)').matches) {
       setIsInstalled(true);
-    }
-
-    if ('Notification' in window) {
-      setNotificationPermission(Notification.permission);
     }
 
     if ('storage' in navigator && 'estimate' in navigator.storage) {
@@ -42,19 +37,13 @@ export default function PWASettingsPage() {
     }
   }, []);
 
+  const [cacheMessage, setCacheMessage] = useState('');
   const clearCache = async () => {
     if ('caches' in window) {
       const cacheNames = await caches.keys();
       await Promise.all(cacheNames.map((name) => caches.delete(name)));
       setCacheSize(0);
-      alert('Cache cleared successfully!');
-    }
-  };
-
-  const requestNotificationPermission = async () => {
-    if ('Notification' in window) {
-      const permission = await Notification.requestPermission();
-      setNotificationPermission(permission);
+      setCacheMessage('Saved pages were cleared from this device.');
     }
   };
 
@@ -107,67 +96,6 @@ export default function PWASettingsPage() {
 
           <div className="bg-white rounded-2xl shadow-sm p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-3">
-              <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
-                <i className="ri-notification-line text-purple-700"></i>
-              </div>
-              Notifications
-            </h2>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                <div>
-                  <p className="font-semibold text-gray-900 mb-1">Push Notifications</p>
-                  <p className="text-sm text-gray-600">
-                    Status: <span className="font-medium capitalize">{notificationPermission}</span>
-                  </p>
-                </div>
-                {notificationPermission === 'default' && (
-                  <button
-                    onClick={requestNotificationPermission}
-                    className="px-4 py-2 bg-purple-700 text-white rounded-lg hover:bg-purple-800 transition-colors whitespace-nowrap"
-                  >
-                    Enable
-                  </button>
-                )}
-                {notificationPermission === 'granted' && (
-                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                    <i className="ri-check-line text-green-700 text-2xl"></i>
-                  </div>
-                )}
-                {notificationPermission === 'denied' && (
-                  <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-                    <i className="ri-close-line text-red-700 text-2xl"></i>
-                  </div>
-                )}
-              </div>
-
-              {notificationPermission === 'granted' && (
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                  <p className="text-sm text-blue-800 font-medium mb-2">You will receive notifications for:</p>
-                  <ul className="space-y-1 text-sm text-blue-700">
-                    <li className="flex items-center gap-2">
-                      <i className="ri-check-line"></i>
-                      <span>Order confirmations and updates</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <i className="ri-check-line"></i>
-                      <span>Flash sales and exclusive deals</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <i className="ri-check-line"></i>
-                      <span>Wishlist price drops</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <i className="ri-check-line"></i>
-                      <span>Back in stock alerts</span>
-                    </li>
-                  </ul>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow-sm p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-3">
               <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
                 <i className="ri-database-line text-orange-700"></i>
               </div>
@@ -184,7 +112,7 @@ export default function PWASettingsPage() {
                 <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
                   <div
                     className="bg-orange-600 h-full rounded-full transition-all"
-                    style={{ width: `${(storageUsage.used / storageUsage.quota) * 100}%` }}
+                    style={{ width: `${storageUsage.quota ? Math.min(100, (storageUsage.used / storageUsage.quota) * 100) : 0}%` }}
                   ></div>
                 </div>
               </div>
@@ -195,6 +123,7 @@ export default function PWASettingsPage() {
                   <p className="text-sm text-gray-600">{cacheSize} items stored locally</p>
                 </div>
                 <button
+                  type="button"
                   onClick={clearCache}
                   className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors whitespace-nowrap"
                 >
@@ -202,12 +131,14 @@ export default function PWASettingsPage() {
                 </button>
               </div>
 
+              {cacheMessage && <p role="status" className="text-sm text-green-700">{cacheMessage}</p>}
+
               <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
                 <div className="flex items-start gap-3">
                   <i className="ri-information-line text-yellow-700 text-xl"></i>
                   <div className="text-sm text-yellow-800">
                     <p className="font-medium mb-1">About Cache</p>
-                    <p>Cached data helps the app load faster and work offline. Clearing cache will remove offline access temporarily.</p>
+                    <p>Saved pages help the shop load faster and let you see some pages you have already opened when you are offline. Ordering and paying always need a connection.</p>
                   </div>
                 </div>
               </div>
@@ -227,14 +158,14 @@ export default function PWASettingsPage() {
                   <i className="ri-wifi-off-line text-green-700 text-xl"></i>
                   <span className="font-semibold text-green-900">Offline Mode</span>
                 </div>
-                <p className="text-sm text-green-800">Browse cached pages without internet</p>
+                <p className="text-sm text-green-800">See some pages you have already opened while offline</p>
               </div>
               <div className="p-4 bg-blue-50 rounded-xl">
                 <div className="flex items-center gap-3 mb-2">
                   <i className="ri-rocket-line text-blue-700 text-xl"></i>
                   <span className="font-semibold text-blue-900">Fast Loading</span>
                 </div>
-                <p className="text-sm text-blue-800">Instant page loads with smart caching</p>
+                <p className="text-sm text-blue-800">Saved pages load faster on repeat visits</p>
               </div>
               <div className="p-4 bg-purple-50 rounded-xl">
                 <div className="flex items-center gap-3 mb-2">
@@ -248,7 +179,7 @@ export default function PWASettingsPage() {
                   <i className="ri-refresh-line text-orange-700 text-xl"></i>
                   <span className="font-semibold text-orange-900">Auto Updates</span>
                 </div>
-                <p className="text-sm text-orange-800">Automatic updates in the background</p>
+                <p className="text-sm text-orange-800">New versions download in the background</p>
               </div>
             </div>
           </div>

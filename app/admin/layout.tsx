@@ -5,6 +5,24 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
+type BellCounts = {
+  pendingReviews: number;
+  newMessages: number;
+  openTickets: number;
+  pendingReturns: number;
+  lowStock: number;
+};
+
+type MenuItem = {
+  title: string;
+  icon: string;
+  path: string;
+  exact?: boolean;
+  badge?: string;
+  moduleId?: string;
+  adminOnly?: boolean;
+};
+
 export default function AdminLayout({
   children,
 }: {
@@ -22,6 +40,10 @@ export default function AdminLayout({
   // Module Filtering State
   const [enabledModules, setEnabledModules] = useState<string[]>([]);
 
+  // Header bell: real counts of things waiting for staff.
+  const [showBell, setShowBell] = useState(false);
+  const [bell, setBell] = useState<BellCounts | null>(null);
+
   useEffect(() => {
     async function checkAuth() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -32,14 +54,17 @@ export default function AdminLayout({
       }
 
       if (!session) {
-        router.push('/admin/login');
+        setIsLoading(false);
+        // Come back to this page after signing in.
+        const back = pathname && pathname !== '/admin' ? `?redirect=${encodeURIComponent(pathname)}` : '';
+        router.push(`/admin/login${back}`);
         return;
       }
 
-      // Ensure auth cookie is set (in case user already had a session from before)
-      document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax; Secure`;
+      // The session cookie the middleware reads is kept in sync by
+      // lib/supabase.ts on every auth change.
 
-      // Check user role from profiles table
+      // Check user role from the signed-in user's own profile row
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role')
@@ -48,15 +73,15 @@ export default function AdminLayout({
 
       if (profileError || !profile) {
         console.error('Failed to fetch user profile');
-        router.push('/admin/login');
+        setIsLoading(false);
+        router.push('/admin/login?error=no_profile');
         return;
       }
 
       // Only allow admin and staff roles
       if (profile.role !== 'admin' && profile.role !== 'staff') {
-        console.warn('User does not have admin/staff role');
-        document.cookie = 'sb-access-token=; path=/; max-age=0; SameSite=Lax; Secure';
         await supabase.auth.signOut();
+        setIsLoading(false);
         router.push('/admin/login?error=unauthorized');
         return;
       }
@@ -68,19 +93,6 @@ export default function AdminLayout({
     }
 
     checkAuth();
-
-    // Keep cookie in sync when session refreshes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED' && session) {
-        document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax; Secure`;
-      }
-      if (event === 'SIGNED_OUT') {
-        document.cookie = 'sb-access-token=; path=/; max-age=0; SameSite=Lax; Secure';
-        document.cookie = 'sb-refresh-token=; path=/; max-age=0; SameSite=Lax; Secure';
-      }
-    });
-
-    return () => subscription.unsubscribe();
   }, [pathname, router]);
 
   useEffect(() => {
@@ -89,11 +101,62 @@ export default function AdminLayout({
       if (showUserMenu && !target.closest('.user-menu-container')) {
         setShowUserMenu(false);
       }
+      if (showBell && !target.closest('.bell-menu-container')) {
+        setShowBell(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowBell(false);
+        setShowUserMenu(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showUserMenu]);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [showUserMenu, showBell]);
+
+  // Bell and sidebar counts: cheap head-count queries, refreshed every 2 minutes
+  // and whenever the page changes (so handling an item clears its count).
+  useEffect(() => {
+    if (!isAuthenticated || !userRole) return;
+    let cancelled = false;
+
+    const count = async (q: PromiseLike<{ count: number | null; error: any }>) => {
+      const { count: n, error } = await q;
+      return error ? 0 : n || 0;
+    };
+
+    async function loadBell() {
+      const [pendingReviews, newMessages, openTickets, pendingReturns, stockRows] = await Promise.all([
+        count(supabase.from('reviews').select('id', { count: 'exact', head: true }).eq('status', 'pending')),
+        count(supabase.from('contact_submissions').select('id', { count: 'exact', head: true }).eq('status', 'new')),
+        count(supabase.from('support_tickets').select('id', { count: 'exact', head: true }).in('status', ['open', 'in_progress'])),
+        count(supabase.from('return_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending')),
+        // Low stock: tracked, active, quantity <= metadata.low_stock_threshold (default 5).
+        supabase.from('products').select('quantity, metadata')
+          .eq('track_quantity', true).eq('status', 'active').lte('quantity', 1000).limit(1000),
+      ]);
+
+      const lowStock = (stockRows.data || []).filter((p: any) => {
+        const t = parseInt(p.metadata?.low_stock_threshold, 10);
+        return (p.quantity ?? 0) <= (Number.isFinite(t) ? t : 5);
+      }).length;
+
+      if (!cancelled) setBell({ pendingReviews, newMessages, openTickets, pendingReturns, lowStock });
+    }
+
+    loadBell();
+    const timer = setInterval(loadBell, 120000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isAuthenticated, userRole, pathname]);
 
   // Fetch Modules Effect
   useEffect(() => {
@@ -132,9 +195,7 @@ export default function AdminLayout({
   }, []);
 
   const handleLogout = async () => {
-    // Clear auth cookies set during login
-    document.cookie = 'sb-access-token=; path=/; max-age=0; SameSite=Lax; Secure';
-    document.cookie = 'sb-refresh-token=; path=/; max-age=0; SameSite=Lax; Secure';
+    // lib/supabase.ts clears the session cookie on sign-out.
     await supabase.auth.signOut();
     router.push('/admin/login');
   };
@@ -143,7 +204,7 @@ export default function AdminLayout({
     return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-500">Loading Admin...</div>;
   }
 
-  const menuItems = [
+  const menuItems: MenuItem[] = [
     {
       title: 'Dashboard',
       icon: 'ri-dashboard-line',
@@ -153,8 +214,7 @@ export default function AdminLayout({
     {
       title: 'Orders',
       icon: 'ri-shopping-bag-line',
-      path: '/admin/orders',
-      badge: ''
+      path: '/admin/orders'
     },
     {
       title: 'Personal Shopper',
@@ -184,12 +244,32 @@ export default function AdminLayout({
     {
       title: 'Reviews',
       icon: 'ri-chat-smile-2-line',
-      path: '/admin/reviews'
+      path: '/admin/reviews',
+      badge: bell?.pendingReviews ? String(bell.pendingReviews) : ''
+    },
+    {
+      title: 'Messages',
+      icon: 'ri-mail-line',
+      path: '/admin/messages',
+      badge: bell?.newMessages ? String(bell.newMessages) : ''
+    },
+    {
+      title: 'Support Tickets',
+      icon: 'ri-customer-service-2-line',
+      path: '/admin/support',
+      badge: bell?.openTickets ? String(bell.openTickets) : ''
+    },
+    {
+      title: 'Returns',
+      icon: 'ri-arrow-go-back-line',
+      path: '/admin/returns',
+      badge: bell?.pendingReturns ? String(bell.pendingReturns) : ''
     },
     {
       title: 'Inventory',
       icon: 'ri-stack-line',
-      path: '/admin/inventory'
+      path: '/admin/inventory',
+      badge: bell?.lowStock ? String(bell.lowStock) : ''
     },
     {
       title: 'Analytics',
@@ -204,12 +284,14 @@ export default function AdminLayout({
     {
       title: 'Delivery Pricing',
       icon: 'ri-truck-line',
-      path: '/admin/delivery'
+      path: '/admin/delivery',
+      adminOnly: true
     },
     {
       title: 'Meta & WhatsApp',
       icon: 'ri-facebook-circle-line',
-      path: '/admin/meta'
+      path: '/admin/meta',
+      adminOnly: true
     },
     {
       title: 'Customer Insights',
@@ -226,7 +308,8 @@ export default function AdminLayout({
     {
       title: 'SMS Debugger',
       icon: 'ri-message-2-line',
-      path: '/admin/test-sms'
+      path: '/admin/test-sms',
+      adminOnly: true
     },
 
     {
@@ -238,16 +321,33 @@ export default function AdminLayout({
     {
       title: 'Modules',
       icon: 'ri-puzzle-line',
-      path: '/admin/modules'
+      path: '/admin/modules',
+      adminOnly: true
+    },
+    {
+      title: 'Staff',
+      icon: 'ri-shield-user-line',
+      path: '/admin/staff',
+      adminOnly: true
     },
   ];
 
   const visibleMenuItems = menuItems.filter(item => {
-    // @ts-ignore
+    if (item.adminOnly && userRole !== 'admin') return false;
     if (!item.moduleId) return true;
-    // @ts-ignore
     return enabledModules.includes(item.moduleId);
   });
+
+  const bellItems = bell ? [
+    { n: bell.pendingReviews, label: 'reviews waiting for approval', href: '/admin/reviews', icon: 'ri-chat-smile-2-line' },
+    { n: bell.newMessages, label: 'new contact messages', href: '/admin/messages', icon: 'ri-mail-line' },
+    { n: bell.openTickets, label: 'open support tickets', href: '/admin/support', icon: 'ri-customer-service-2-line' },
+    { n: bell.pendingReturns, label: 'return requests to review', href: '/admin/returns', icon: 'ri-arrow-go-back-line' },
+    { n: bell.lowStock, label: 'products low on stock', href: '/admin/inventory', icon: 'ri-stack-line' },
+  ].filter(i => i.n > 0) : [];
+  // Low stock is listed but does not light the dot on its own: it rarely
+  // clears the same day, and a dot that never goes out means nothing.
+  const bellHasAction = !!bell && (bell.pendingReviews + bell.newMessages + bell.openTickets + bell.pendingReturns) > 0;
 
   // Special layout for Login Page
   if (pathname === '/admin/login') {
@@ -329,20 +429,58 @@ export default function AdminLayout({
           <div className="px-4 py-4 lg:px-6 flex items-center justify-between">
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              aria-label={isSidebarOpen ? 'Hide menu' : 'Show menu'}
               className="w-10 h-10 flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
             >
               <i className={`${isSidebarOpen ? 'ri-menu-fold-line' : 'ri-menu-unfold-line'} text-xl`}></i>
             </button>
 
             <div className="flex items-center space-x-2 lg:space-x-4">
-              <button className="relative w-10 h-10 flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
-                <i className="ri-notification-3-line text-xl"></i>
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-              </button>
+              <div className="relative bell-menu-container">
+                <button
+                  onClick={() => setShowBell(v => !v)}
+                  aria-label={bellHasAction ? 'Notifications (items waiting)' : 'Notifications'}
+                  aria-expanded={showBell}
+                  aria-haspopup="true"
+                  className="relative w-10 h-10 flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  <i className="ri-notification-3-line text-xl"></i>
+                  {bellHasAction && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>}
+                </button>
+                {showBell && (
+                  <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-20">
+                    <div className="px-4 py-3 border-b border-gray-100">
+                      <p className="text-sm font-semibold text-gray-900">Waiting for you</p>
+                    </div>
+                    {!bell ? (
+                      <p className="px-4 py-4 text-sm text-gray-500">Loading...</p>
+                    ) : bellItems.length === 0 ? (
+                      <p className="px-4 py-4 text-sm text-gray-500">Nothing needs attention right now.</p>
+                    ) : (
+                      <ul className="divide-y divide-gray-100">
+                        {bellItems.map(i => (
+                          <li key={i.label}>
+                            <Link
+                              href={i.href}
+                              onClick={() => setShowBell(false)}
+                              className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-sm text-gray-700"
+                            >
+                              <i className={`${i.icon} text-lg text-gray-500`}></i>
+                              <span><span className="font-semibold text-gray-900">{i.n}</span> {i.label}</span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
 
               <div className="relative user-menu-container">
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}
+                  aria-label="Account menu"
+                  aria-expanded={showUserMenu}
                   className="flex items-center space-x-2 lg:space-x-3 px-2 lg:px-3 py-2 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
                 >
                   <div className="w-8 h-8 lg:w-9 lg:h-9 flex items-center justify-center bg-blue-100 text-blue-700 rounded-full font-semibold">

@@ -1,81 +1,49 @@
 import { NextResponse } from 'next/server';
 import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '@/lib/rate-limit';
-import { loadPaymentTarget, recordPaymentAttempt } from '@/lib/payment-target';
+import { preparePaymentStart, recordPaymentAttempt, returnUrls } from '@/lib/payment-target';
 
+/**
+ * POST /api/payment/moolre — open a Mobile Money payment (Moolre hosted page).
+ *
+ * Body: { orderId: <ORD-/SR- ref or row uuid>, orderUuid?, customerEmail?, phone? }
+ * plus an optional Bearer token. The caller must prove the order is theirs
+ * (orderUuid = row id, matching phone or email, or an owner/staff token):
+ * otherwise 403. The amount is always the stored server total. Paid → 409,
+ * cancelled/refunded → 409. The customer may switch provider and retry.
+ *
+ * 200 → { success: true, url, reference }
+ */
 export async function POST(req: Request) {
     try {
         const clientId = getClientIdentifier(req);
         const rateLimitResult = checkRateLimit(`payment:${clientId}`, RATE_LIMITS.payment);
-
         if (!rateLimitResult.success) {
             return NextResponse.json(
                 { success: false, message: 'Too many requests. Please try again later.' },
-                {
-                    status: 429,
-                    headers: {
-                        'X-RateLimit-Remaining': '0',
-                        'X-RateLimit-Reset': rateLimitResult.resetIn.toString()
-                    }
-                }
+                { status: 429, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': rateLimitResult.resetIn.toString() } },
             );
         }
 
-        const body = await req.json();
-        const { orderId, customerEmail } = body;
-
-        if (!orderId || typeof orderId !== 'string') {
-            return NextResponse.json({ success: false, message: 'Missing or invalid orderId' }, { status: 400 });
-        }
+        const body = await req.json().catch(() => ({}));
 
         if (!process.env.MOOLRE_API_USER || !process.env.MOOLRE_API_PUBKEY || !process.env.MOOLRE_ACCOUNT_NUMBER) {
-            console.error('Missing Moolre credentials');
+            console.error('[Moolre] gateway credentials are not configured');
             return NextResponse.json({ success: false, message: 'Payment gateway configuration error' }, { status: 500 });
         }
 
-        // SECURITY: Fetch the target from the database and use its total.
-        // NEVER trust the amount from the client.
-        // The reference may be a UUID, an ORD-... order number, or an SR-...
-        // shopper-request number — lib/payment-target dispatches.
-        const target = await loadPaymentTarget(orderId);
-        if (!target) {
-            console.error('[Payment] Target not found:', orderId);
-            return NextResponse.json({ success: false, message: 'Order not found' }, { status: 404 });
+        const prepared = await preparePaymentStart(req, body || {});
+        if (!prepared.ok) {
+            return NextResponse.json({ success: false, message: prepared.message }, { status: prepared.status });
         }
-
-        if (target.payment_status === 'paid') {
-            return NextResponse.json({ success: false, message: 'Order is already paid' }, { status: 400 });
-        }
-
-        // Moolre rejects amounts with float noise (116.33999999999999), so
-        // send whole pesewas.
-        const amount = Math.round(Number(target.amount) * 100) / 100;
-        if (!amount || amount <= 0) {
-            return NextResponse.json(
-                {
-                    success: false,
-                    message:
-                        target.kind === 'shopper_request'
-                            ? 'This request is not yet ready for payment'
-                            : 'Invalid order amount',
-                },
-                { status: 400 }
-            );
-        }
-
-        const orderRef = target.ref;
+        const { target, amount } = prepared;
 
         const requestUrl = new URL(req.url);
         const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || requestUrl.origin).replace(/\/+$/, '');
+        const uniqueRef = `${target.ref}-R${Date.now()}`;
+        const urls = returnUrls(target, 'moolre', baseUrl);
 
-        const uniqueRef = `${orderRef}-R${Date.now()}`;
-
-        // Shopper-request payments redirect back into the shopper subdomain so
-        // branding stays consistent for that customer. The &provider= hint
-        // lets the landing page pick the right verify endpoint without a guess.
-        const redirectPath =
-            target.kind === 'shopper_request'
-                ? `/shopper/payment-complete?ref=${orderRef}&payment_success=true&provider=moolre`
-                : `/order-success?order=${orderRef}&payment_success=true&provider=moolre`;
+        // Recorded before the gateway call so verify/callback always know this reference.
+        await recordPaymentAttempt(target, { provider: 'moolre', uniqueRef });
 
         const payload = {
             type: 1,
@@ -83,46 +51,40 @@ export async function POST(req: Request) {
             email: process.env.MOOLRE_MERCHANT_EMAIL || 'admin@gsgbrands.com.gh',
             externalref: uniqueRef,
             callback: `${baseUrl}/api/payment/moolre/callback`,
-            redirect: `${baseUrl}${redirectPath}`,
-            reusable: "0",
-            currency: "GHS",
+            redirect: urls.success,
+            reusable: '0',
+            currency: 'GHS',
             accountnumber: process.env.MOOLRE_ACCOUNT_NUMBER,
             metadata: {
-                customer_email: customerEmail || target.email,
-                original_order_number: orderRef,
+                original_order_number: target.ref,
                 kind: target.kind,
-            }
+            },
         };
 
-        console.log('[Payment] Initiating for', target.kind, orderRef, '| Amount from DB:', amount, '| Callback:', payload.callback);
+        console.log('[Moolre] start', target.kind, target.ref, '| amount:', amount);
 
         const response = await fetch('https://api.moolre.com/embed/link', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-API-USER': process.env.MOOLRE_API_USER,
-                'X-API-PUBKEY': process.env.MOOLRE_API_PUBKEY
+                'X-API-PUBKEY': process.env.MOOLRE_API_PUBKEY,
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(20000),
         });
+        const result = await response.json().catch(() => ({}));
 
-        const result = await response.json();
-        console.log('[Payment] Response status:', result.status, '| Has URL:', !!result.data?.authorization_url);
-
-        if (result.status === 1 && result.data?.authorization_url) {
-            try {
-                await recordPaymentAttempt(target, { provider: 'moolre', uniqueRef });
-            } catch (metaErr: any) {
-                console.warn('[Payment] Failed to persist last_payment_ref:', metaErr?.message);
-            }
-
+        if (result?.status === 1 && result?.data?.authorization_url) {
             return NextResponse.json({ success: true, url: result.data.authorization_url, reference: uniqueRef });
-        } else {
-            return NextResponse.json({ success: false, message: result.message || 'Failed to generate payment link' }, { status: 400 });
         }
-
+        console.warn('[Moolre] link not created | HTTP', response.status, '| code:', result?.code ?? 'none');
+        return NextResponse.json(
+            { success: false, message: 'We could not open Mobile Money payment. Please try again or pay by card.' },
+            { status: 502 },
+        );
     } catch (error: any) {
-        console.error('Payment API Error:', error);
+        console.error('[Moolre] start error:', error?.name || 'error');
         return NextResponse.json({ success: false, message: 'Internal Server Error' }, { status: 500 });
     }
 }

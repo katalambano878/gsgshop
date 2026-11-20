@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useCMS } from '@/context/CMSContext';
 import PageHero from '@/components/PageHero';
 import { usePageTitle } from '@/hooks/usePageTitle';
+import { shopperUrl } from '@/lib/site-urls';
 
 export default function AboutPage() {
   usePageTitle('Our Story');
@@ -16,33 +17,24 @@ export default function AboutPage() {
   const values = [
     {
       icon: 'ri-verified-badge-line',
-      title: 'Verified Quality',
-      description: 'Every product is personally inspected before it reaches you. Whether sourced locally or imported, quality comes first.'
+      title: 'Quality First',
+      description: 'We check what we sell and stand behind it: if something arrives wrong or damaged, tell us within 24 hours and we put it right.'
     },
     {
       icon: 'ri-money-dollar-circle-line',
-      title: 'Unbeatable Prices',
-      description: 'By sourcing directly from manufacturers and local suppliers, we cut out the middleman and pass the savings to you.'
+      title: 'Fair Prices',
+      description: 'Clear prices in Ghana Cedis, with the delivery fee for your location shown at checkout before you pay.'
     },
     {
       icon: 'ri-global-line',
-      title: 'Local & Imported',
-      description: 'The best of both worlds — handpicked local products alongside carefully selected imports from trusted global suppliers.'
+      title: 'Everyday Essentials',
+      description: 'Groceries, household goods and personal-care products from brands you know, local and imported.'
     },
     {
       icon: 'ri-truck-line',
-      title: 'Nationwide Delivery',
-      description: 'Fast and reliable delivery across Ghana. Based in Accra, we ship to every region with care and speed.'
+      title: 'Delivery in Accra',
+      description: 'Pickup, Free Delivery, Sole Express or Joint Express in and around Accra. For other regions we send your order to an Accra transport station.'
     }
-  ];
-
-  const teamMembers = [
-    'Kwame Asante',
-    'Ama Serwaa',
-    'Kofi Mensah',
-    'Akua Boateng',
-    'Yaw Darko',
-    'Efua Owusu',
   ];
 
   return (
@@ -54,9 +46,11 @@ export default function AboutPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
         <div className="flex border-b border-gray-200 mb-12 justify-center">
-          {['story', 'mission', 'team'].map((tab) => (
+          {['story', 'mission'].map((tab) => (
             <button
               key={tab}
+              type="button"
+              aria-pressed={activeTab === tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 sm:px-8 sm:py-4 font-medium transition-colors text-lg cursor-pointer capitalize ${
                 activeTab === tab
@@ -64,7 +58,7 @@ export default function AboutPage() {
                   : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              {tab === 'team' ? 'Advisory & Executive Team' : tab === 'story' ? 'Our Story' : 'Our Mission'}
+              {tab === 'story' ? 'Our Story' : 'Our Mission'}
             </button>
           ))}
         </div>
@@ -78,10 +72,10 @@ export default function AboutPage() {
                   <strong>{siteName}</strong> started with a simple idea: bring quality products to Ghanaians at fair prices. We saw how people were paying too much for items that could be sourced smarter — so we built a bridge between trusted manufacturers, local suppliers, and everyday shoppers.
                 </p>
                 <p>
-                  What began as a small operation in Accra has grown into a full online store offering everything from food essentials and household goods to specialty products and building materials. We handpick every product, test it for quality, and price it fairly.
+                  Today we are an online convenience store in Accra, offering food essentials, groceries, household goods and personal-care products, delivered in and around the city or ready to collect from our pickup point.
                 </p>
                 <p>
-                  Whether you are shopping for yourself, running a household, or looking for the perfect gift, <strong>{siteName}</strong> has you covered. We combine local sourcing with direct imports to give you the widest selection at the best value.
+                  Need something we do not stock? Our Personal Shopper service buys it at the market for you. Whether you are shopping for yourself or running a household, <strong>{siteName}</strong> has you covered.
                 </p>
               </div>
             </div>
@@ -110,39 +104,22 @@ export default function AboutPage() {
               </div>
               <h3 className="text-3xl font-bold text-gray-900 mb-4">Everything in One Place</h3>
               <p className="text-gray-600 text-lg leading-relaxed">
-                From food essentials to building materials, convenience goods to specialty items — we aim to be the only store you need. Our catalogue is constantly expanding with new arrivals sourced from trusted local and international suppliers.
+                From food essentials to household and personal-care goods, we aim to be the convenience store you reach for first, with your order delivered or ready to collect.
               </p>
             </div>
             <div className="bg-amber-50 p-10 rounded-3xl border border-amber-100">
               <div className="w-16 h-16 bg-amber-600 rounded-2xl flex items-center justify-center mb-8 shadow-lg">
                 <i className="ri-hand-heart-line text-3xl text-white"></i>
               </div>
-              <h3 className="text-3xl font-bold text-gray-900 mb-4">Empowering Resellers</h3>
+              <h3 className="text-3xl font-bold text-gray-900 mb-4">Personal Shopper</h3>
               <p className="text-gray-600 text-lg leading-relaxed">
-                We support small businesses and resellers with competitive bulk pricing. Many of our products are available at wholesale rates, helping entrepreneurs across Ghana grow their own ventures.
+                Send us your shopping list and we buy the items at the market for you, then deliver them.{' '}
+                <a href={shopperUrl('/')} className="text-gsg-purple font-semibold hover:underline">Find out more</a>.
               </p>
             </div>
           </div>
         )}
 
-        {activeTab === 'team' && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-gray-900 mb-4">Advisory & Executive Team</h2>
-              <p className="text-lg text-gray-600 max-w-2xl mx-auto">The people behind GSG Brands, driving our vision of accessible, quality commerce across Ghana.</p>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-6 max-w-3xl mx-auto">
-              {teamMembers.map((name, index) => (
-                <div key={index} className="bg-gray-50 rounded-2xl p-6 text-center border border-gray-100 hover:shadow-md hover:border-gsg-purple/20 transition-all">
-                  <div className="w-16 h-16 bg-gsg-purple/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <i className="ri-user-line text-2xl text-gsg-purple"></i>
-                  </div>
-                  <p className="font-bold text-gsg-black">{name}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Values Section */}
@@ -150,13 +127,13 @@ export default function AboutPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">Why Shop With Us?</h2>
-            <p className="text-xl text-gray-600 max-w-2xl mx-auto">Trusted by hundreds of customers and resellers across Ghana.</p>
+            <p className="text-xl text-gray-600 max-w-2xl mx-auto">Convenience goods and groceries for homes and offices in and around Accra.</p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-            {values.map((value, index) => (
-              <div key={index} className="bg-white p-8 rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+            {values.map((value) => (
+              <div key={value.title} className="bg-white p-8 rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
                 <div className="w-14 h-14 bg-purple-100 rounded-full flex items-center justify-center mb-6">
-                  <i className={`${value.icon} text-2xl text-gsg-purple`}></i>
+                  <i className={`${value.icon} text-2xl text-gsg-purple`} aria-hidden="true"></i>
                 </div>
                 <h3 className="text-xl font-bold text-gray-900 mb-3">{value.title}</h3>
                 <p className="text-gray-600 leading-relaxed">{value.description}</p>
@@ -171,7 +148,7 @@ export default function AboutPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-white">
           <h2 className="text-4xl md:text-5xl font-bold mb-8">Ready to shop smarter?</h2>
           <p className="text-xl text-purple-100 mb-10 leading-relaxed max-w-2xl mx-auto">
-            Browse our collection of food essentials, household goods, specialty items and more. New stock arrives weekly.
+            Browse our food essentials, groceries, household goods and more.
           </p>
           <Link
             href="/shop"

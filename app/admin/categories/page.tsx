@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
+import { uploadErrorText } from '@/components/admin/uploadError';
 
 export default function AdminCategoriesPage() {
   const [showAddModal, setShowAddModal] = useState(false);
@@ -13,6 +14,14 @@ export default function AdminCategoriesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // In add mode the slug follows the name until someone types in the slug field.
+  const slugTouched = useRef(false);
+
+  // Delete dialog
+  const [deleting, setDeleting] = useState<{ category: any; products: number; children: number } | null>(null);
+  const [moveTo, setMoveTo] = useState<string>('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   // Form State
   const [formData, setFormData] = useState({
@@ -22,7 +31,8 @@ export default function AdminCategoriesPage() {
     image_url: '',
     parent_id: '' as string | null,
     featured: false,
-    status: 'active'
+    status: 'active',
+    position: '0'
   });
 
   useEffect(() => {
@@ -35,7 +45,8 @@ export default function AdminCategoriesPage() {
       const { data, error } = await supabase
         .from('categories')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('position', { ascending: true })
+        .order('name', { ascending: true });
 
       if (error) throw error;
       if (data) setCategories(data);
@@ -55,21 +66,71 @@ export default function AdminCategoriesPage() {
       image_url: category.image_url || '',
       parent_id: category.parent_id || '',
       featured: category.metadata?.featured || false,
-      status: category.status
+      status: category.status,
+      position: String(category.position ?? 0)
     });
+    slugTouched.current = true;
     setShowEditModal(true);
   };
 
-  const handleDelete = async (categoryId: string) => {
-    if (confirm('Are you sure you want to delete this category? This action cannot be undone.')) {
-      try {
-        const { error } = await supabase.from('categories').delete().eq('id', categoryId);
-        if (error) throw error;
-        setCategories(categories.filter(c => c.id !== categoryId));
-        alert('Category deleted successfully');
-      } catch (err: any) {
-        alert('Error deleting: ' + err.message);
+  /** Ids of every category below `id` (children, grandchildren, ...). */
+  const descendantIds = (id: string): Set<string> => {
+    const out = new Set<string>();
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      for (const c of categories) {
+        if (c.parent_id === cur && !out.has(c.id)) {
+          out.add(c.id);
+          stack.push(c.id);
+        }
       }
+    }
+    return out;
+  };
+
+  const handleDelete = async (category: any) => {
+    setDeleteError('');
+    try {
+      const [{ count: productCount, error: pErr }, { count: childCount, error: cErr }] = await Promise.all([
+        supabase.from('products').select('id', { count: 'exact', head: true }).eq('category_id', category.id),
+        supabase.from('categories').select('id', { count: 'exact', head: true }).eq('parent_id', category.id),
+      ]);
+      if (pErr) throw pErr;
+      if (cErr) throw cErr;
+      setMoveTo(category.parent_id || '');
+      setDeleting({ category, products: productCount || 0, children: childCount || 0 });
+    } catch (err: any) {
+      alert('Could not check whether the category is in use: ' + (err?.message || 'unknown error'));
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    const { category, products, children } = deleting;
+    setDeleteBusy(true);
+    setDeleteError('');
+    try {
+      // The foreign keys have no ON DELETE rule, so move things out first or
+      // the delete fails.
+      if (products) {
+        const { error } = await supabase.from('products').update({ category_id: moveTo || null }).eq('category_id', category.id);
+        if (error) throw error;
+      }
+      if (children) {
+        // Subcategories move up to this category's own parent.
+        const { error } = await supabase.from('categories').update({ parent_id: category.parent_id || null }).eq('parent_id', category.id);
+        if (error) throw error;
+      }
+      const { error } = await supabase.from('categories').delete().eq('id', category.id);
+      if (error) throw error;
+      setDeleting(null);
+      fetchCategories();
+    } catch (err: any) {
+      setDeleteError('Category not deleted: ' + (err?.message || 'unknown error'));
+      fetchCategories();
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -80,7 +141,9 @@ export default function AdminCategoriesPage() {
       setUploading(true);
       const file = e.target.files[0];
       const fileExt = file.name.split('.').pop();
-      const fileName = `cat-${Math.random()}.${fileExt}`;
+      if (!file.type.startsWith('image/')) throw new Error('Choose an image file.');
+      if (file.size > 5 * 1024 * 1024) throw new Error('The image is larger than 5 MB.');
+      const fileName = `cat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${(fileExt || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '')}`;
       const filePath = `${fileName}`;
 
       // Upload to 'products' bucket for simplicity, or create a 'categories' bucket
@@ -97,7 +160,7 @@ export default function AdminCategoriesPage() {
       setFormData({ ...formData, image_url: publicUrl });
 
     } catch (error: any) {
-      alert('Error uploading image: ' + error.message);
+      alert('Image not uploaded: ' + uploadErrorText(error));
     } finally {
       setUploading(false);
     }
@@ -109,21 +172,47 @@ export default function AdminCategoriesPage() {
       return;
     }
 
+    const slug = formData.slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+    if (!slug) {
+      alert('The slug needs at least one letter or number.');
+      return;
+    }
+    const position = parseInt(formData.position, 10);
+    if (!Number.isFinite(position) || String(position) !== formData.position.trim()) {
+      alert('Position must be a whole number (lower numbers are shown first).');
+      return;
+    }
+
+    const parentId = formData.parent_id || null;
+    if (showEditModal && editingCategory && parentId) {
+      // A category cannot sit under itself or under one of its own subcategories.
+      if (parentId === editingCategory.id || descendantIds(editingCategory.id).has(parentId)) {
+        alert('That parent is inside this category, so the two would contain each other. Choose a different parent.');
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      const payload = {
-        name: formData.name,
-        slug: formData.slug,
+      const payload: Record<string, unknown> = {
+        name: formData.name.trim(),
+        slug,
         description: formData.description,
         image_url: formData.image_url,
-        parent_id: formData.parent_id || null, // Handle empty string as null
+        parent_id: parentId,
         status: formData.status,
-        metadata: {
-          featured: formData.featured
-        }
+        position,
+        metadata: { featured: formData.featured }
       };
 
       if (showEditModal && editingCategory) {
+        // Keep every other metadata key and only change `featured`, merged
+        // with the latest stored metadata, not the copy loaded with the list.
+        const { data: current, error: readErr } = await supabase
+          .from('categories').select('metadata').eq('id', editingCategory.id).single();
+        if (readErr) throw readErr;
+        payload.metadata = { ...(current?.metadata || {}), featured: formData.featured };
+        payload.updated_at = new Date().toISOString();
         const { error } = await supabase
           .from('categories')
           .update(payload)
@@ -141,20 +230,22 @@ export default function AdminCategoriesPage() {
       setShowAddModal(false);
       setShowEditModal(false);
       setEditingCategory(null);
-      setFormData({ name: '', slug: '', description: '', image_url: '', parent_id: '', featured: false, status: 'active' });
+      setFormData({ name: '', slug: '', description: '', image_url: '', parent_id: '', featured: false, status: 'active', position: '0' });
       fetchCategories();
 
     } catch (err: any) {
-      console.error(err);
-      alert('Error saving category: ' + err.message);
+      const msg = err?.message || 'unknown error';
+      alert(/categories_slug_key|duplicate key/i.test(msg)
+        ? 'Another category already uses that slug. Change the slug.'
+        : 'Category not saved: ' + msg);
     } finally {
       setSaving(false);
     }
   };
 
-  // Auto-generate slug
+  // Auto-generate slug from the name, only until the slug is typed by hand.
   useEffect(() => {
-    if (showAddModal && formData.name && !editingCategory) {
+    if (showAddModal && !editingCategory && !slugTouched.current) {
       setFormData(prev => ({
         ...prev,
         slug: prev.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '')
@@ -173,7 +264,8 @@ export default function AdminCategoriesPage() {
         <button
           onClick={() => {
             setEditingCategory(null);
-            setFormData({ name: '', slug: '', description: '', image_url: '', parent_id: '', featured: false, status: 'active' });
+            setFormData({ name: '', slug: '', description: '', image_url: '', parent_id: '', featured: false, status: 'active', position: String(categories.length) });
+            slugTouched.current = false;
             setShowAddModal(true);
           }}
           className="bg-blue-700 hover:bg-blue-800 text-white px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap cursor-pointer"
@@ -206,6 +298,7 @@ export default function AdminCategoriesPage() {
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700">Category</th>
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700">Slug</th>
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700">Parent</th>
+                <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700">Position</th>
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700">Status</th>
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700">Featured</th>
                 <th className="text-left py-4 px-4 text-sm font-semibold text-gray-700">Actions</th>
@@ -213,9 +306,9 @@ export default function AdminCategoriesPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="p-8 text-center text-gray-500">Loading categories...</td></tr>
+                <tr><td colSpan={7} className="p-8 text-center text-gray-500">Loading categories...</td></tr>
               ) : categories.length === 0 ? (
-                <tr><td colSpan={6} className="p-8 text-center text-gray-500">No categories found. Create one to get started!</td></tr>
+                <tr><td colSpan={7} className="p-8 text-center text-gray-500">No categories found. Create one to get started!</td></tr>
               ) : (
                 categories.map((category) => (
                   <tr key={category.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
@@ -237,6 +330,7 @@ export default function AdminCategoriesPage() {
                     <td className="py-4 px-4 text-sm text-gray-600">
                       {categories.find(c => c.id === category.parent_id)?.name || '-'}
                     </td>
+                    <td className="py-4 px-4 text-sm text-gray-600">{category.position ?? 0}</td>
                     <td className="py-4 px-4">
                       <span className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap capitalize ${category.status === 'active' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
                         }`}>
@@ -256,12 +350,16 @@ export default function AdminCategoriesPage() {
                       <div className="flex items-center space-x-2">
                         <button
                           onClick={() => handleEdit(category)}
+                          aria-label={`Edit ${category.name}`}
+                          title="Edit category"
                           className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                         >
                           <i className="ri-edit-line text-lg w-4 h-4 flex items-center justify-center"></i>
                         </button>
                         <button
-                          onClick={() => handleDelete(category.id)}
+                          onClick={() => handleDelete(category)}
+                          aria-label={`Delete ${category.name}`}
+                          title="Delete category"
                           className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
                         >
                           <i className="ri-delete-bin-line text-lg w-4 h-4 flex items-center justify-center"></i>
@@ -289,6 +387,7 @@ export default function AdminCategoriesPage() {
                   setShowEditModal(false);
                   setEditingCategory(null);
                 }}
+                aria-label="Close"
                 className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
               >
                 <i className="ri-close-line text-2xl w-6 h-6 flex items-center justify-center"></i>
@@ -321,7 +420,8 @@ export default function AdminCategoriesPage() {
                   >
                     <option value="">None (Top Level)</option>
                     {categories
-                      .filter(c => c.id !== editingCategory?.id) // Prevent self-parenting
+                      // Not itself and not one of its own subcategories (that would make a loop).
+                      .filter(c => !editingCategory || (c.id !== editingCategory.id && !descendantIds(editingCategory.id).has(c.id)))
                       .map(c => (
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))
@@ -337,7 +437,7 @@ export default function AdminCategoriesPage() {
                 <input
                   type="text"
                   value={formData.slug}
-                  onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+                  onChange={(e) => { slugTouched.current = true; setFormData({ ...formData, slug: e.target.value }); }}
                   className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   placeholder="category-url-slug"
                 />
@@ -388,6 +488,20 @@ export default function AdminCategoriesPage() {
                 </div>
               </div>
 
+              <div>
+                <label htmlFor="cat-position" className="block text-sm font-semibold text-gray-900 mb-2">Position</label>
+                <input
+                  id="cat-position"
+                  type="number"
+                  step={1}
+                  inputMode="numeric"
+                  value={formData.position}
+                  onChange={(e) => setFormData({ ...formData, position: e.target.value })}
+                  className="w-40 px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Lower numbers are listed first.</p>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-900 mb-2">Status</label>
@@ -402,12 +516,13 @@ export default function AdminCategoriesPage() {
                 </div>
                 <div className="flex items-center space-x-3 mt-6">
                   <input
+                    id="cat-featured"
                     type="checkbox"
                     checked={formData.featured}
                     onChange={(e) => setFormData({ ...formData, featured: e.target.checked })}
                     className="w-5 h-5 text-blue-700 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
                   />
-                  <label className="text-gray-900 font-medium">
+                  <label htmlFor="cat-featured" className="text-gray-900 font-medium">
                     Feature on homepage
                   </label>
                 </div>
@@ -434,6 +549,54 @@ export default function AdminCategoriesPage() {
               >
                 {saving && <i className="ri-loader-4-line animate-spin mr-2"></i>}
                 {showAddModal ? 'Add Category' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {deleting && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !deleteBusy && setDeleting(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" role="dialog" aria-modal="true" aria-labelledby="cat-delete-title" onClick={(e) => e.stopPropagation()}>
+            <h2 id="cat-delete-title" className="text-xl font-bold text-gray-900 mb-2">Delete &quot;{deleting.category.name}&quot;?</h2>
+            <p className="text-sm text-gray-600 mb-4">This cannot be undone.</p>
+            {deleting.products === 0 && deleting.children === 0 ? (
+              <p className="text-sm text-gray-700 mb-4">No products or subcategories use it.</p>
+            ) : (
+              <div className="space-y-4 mb-4 text-sm text-gray-700">
+                <p>This category is still in use, so it is emptied first:</p>
+                {deleting.products > 0 && (
+                  <div>
+                    <label htmlFor="cat-move-to" className="block font-semibold text-gray-900 mb-1">
+                      Move its {deleting.products} product{deleting.products !== 1 ? 's' : ''} to
+                    </label>
+                    <select
+                      id="cat-move-to"
+                      value={moveTo}
+                      onChange={(e) => setMoveTo(e.target.value)}
+                      className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">No category (uncategorised)</option>
+                      {categories
+                        .filter(c => c.id !== deleting.category.id && !descendantIds(deleting.category.id).has(c.id))
+                        .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                {deleting.children > 0 && (
+                  <p>
+                    Its {deleting.children} subcategor{deleting.children !== 1 ? 'ies' : 'y'} move up to{' '}
+                    {categories.find(c => c.id === deleting.category.parent_id)?.name || 'the top level'}.
+                  </p>
+                )}
+              </div>
+            )}
+            {deleteError && (
+              <div className="mb-4 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded-lg text-sm" role="alert">{deleteError}</div>
+            )}
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setDeleting(null)} disabled={deleteBusy} className="px-5 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-gray-400 cursor-pointer">Cancel</button>
+              <button onClick={confirmDelete} disabled={deleteBusy} className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold disabled:opacity-50 cursor-pointer">
+                {deleteBusy ? 'Deleting...' : 'Delete category'}
               </button>
             </div>
           </div>

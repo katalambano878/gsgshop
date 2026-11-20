@@ -8,7 +8,9 @@ import { GSG_HUB, POPULAR_DELIVERY_PLACES } from '@/lib/delivery-hub';
  *
  * Customer types an area / landmark (or taps a common Accra area, or GPS).
  * The server geocodes it and returns driving km from the GSG hub, which
- * the parent uses for Sole / Joint Express fees.
+ * the parent uses for Sole / Joint Express fees. The pin (lat/lng) is what
+ * the server charges by; there is no manual distance entry, so a typed km
+ * can never set the fee.
  */
 
 export type DeliveryLocationResult = {
@@ -82,7 +84,6 @@ export default function DeliveryLocationPicker({
   const [calculating, setCalculating] = useState(false);
   const [locating, setLocating] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const [showManual, setShowManual] = useState(false);
   const [hubLabel, setHubLabel] = useState(GSG_HUB.label);
   const [selected, setSelected] = useState<{
     label: string;
@@ -288,7 +289,16 @@ export default function DeliveryLocationPicker({
                   aria-controls={listId}
                   aria-autocomplete="list"
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    // Typing a new place drops the old pin and distance, so the
+                    // fee and the rider's pin never point at different places.
+                    if (selected) {
+                      reqIdRef.current++;
+                      setSelected(null);
+                      callbacksRef.current.onDistanceChange('');
+                    }
+                  }}
                   onFocus={() => suggestions.length > 0 && setOpen(true)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -429,47 +439,23 @@ export default function DeliveryLocationPicker({
                 </div>
               </div>
             </div>
-          ) : (
-            hasDistance && (
-              <div className="border-t border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-700 tabular-nums">
-                Distance set manually: <strong>{kmNum.toFixed(1)} km</strong>
-              </div>
-            )
-          )}
+          ) : null}
         </div>
       </div>
 
-      <div>
-        <button
-          type="button"
-          onClick={() => setShowManual((v) => !v)}
-          className="text-xs font-semibold text-gray-500 hover:text-gsg-purple"
+      <p className="text-xs text-gray-500 text-pretty">
+        Can&apos;t find your exact place? Pick the nearest landmark, junction or area you can find, and put
+        the exact directions in the street address. Still stuck?{' '}
+        <a
+          href="https://wa.me/233246033792"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold text-gsg-purple underline underline-offset-2"
         >
-          {showManual ? 'Hide manual distance' : "Can't find it? Enter distance manually"}
-        </button>
-        {showManual && (
-          <div className="mt-2 flex items-center gap-2">
-            <label htmlFor={`${listId}-manual`} className="sr-only">
-              Distance in km
-            </label>
-            <input
-              id={`${listId}-manual`}
-              type="number"
-              min={0.1}
-              step={0.1}
-              inputMode="decimal"
-              value={valueKm}
-              onChange={(e) => {
-                setSelected(null);
-                callbacksRef.current.onDistanceChange(e.target.value);
-              }}
-              className="w-32 px-3 py-2.5 border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple outline-none tabular-nums"
-              placeholder="km"
-            />
-            <span className="text-xs text-gray-500">km from {hubShort.split(',')[0]}</span>
-          </div>
-        )}
-      </div>
+          WhatsApp us on +233 24 603 3792
+        </a>{' '}
+        and we will help.
+      </p>
     </div>
   );
 }

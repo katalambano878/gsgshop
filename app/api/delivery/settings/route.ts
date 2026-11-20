@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
  * GET  /api/delivery/settings — public: effective pricing config + hub.
  *      Storefront/shopper pages use this so fee previews match what the
  *      server will actually charge.
- * PUT  /api/delivery/settings — admin: update the settings.
+ * PUT  /api/delivery/settings — ADMIN ONLY (not staff): update the settings.
  */
 
 export async function GET() {
@@ -18,9 +18,12 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    const auth = await verifyAuth(request, { requireAdmin: true });
+    const auth = await verifyAuth(request, { requireRole: 'admin' });
     if (!auth.authenticated) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json(
+        { success: false, error: auth.user ? 'Administrator access required' : 'Unauthorized' },
+        { status: auth.user ? 403 : 401 }
+      );
     }
 
     const body = await request.json().catch(() => null);
@@ -31,10 +34,7 @@ export async function PUT(request: Request) {
     const settings = await saveDeliverySettings(body);
     return NextResponse.json({ success: true, settings });
   } catch (err: any) {
-    console.error('[delivery/settings]', err?.message || err);
-    return NextResponse.json(
-      { success: false, error: err?.message || 'Failed to save settings' },
-      { status: 500 }
-    );
+    console.error('[delivery/settings] save failed:', err?.code || err?.message || 'error');
+    return NextResponse.json({ success: false, error: 'Failed to save settings' }, { status: 500 });
   }
 }

@@ -10,17 +10,19 @@ import {
 } from '@/lib/delivery-hub';
 import { getDeliverySettings } from '@/lib/delivery-settings';
 import {
-  googleDrivingKm,
   googleGeocode,
   googleReverseGeocode,
   hasGoogleMapsKey,
+  hubToStationKm,
+  routedKm,
 } from '@/lib/google-maps-delivery';
 
 /**
  * POST /api/delivery/distance
  * Body: { query?: string; lat?: number; lng?: number; reverse?: boolean }
  *
- * Resolves a Ghana location and returns road distance (km) from the GSG East Legon hub.
+ * Resolves a Ghana location and returns road distance (km) from the GSG hub in the delivery settings.
+ * The km shown here is a quote: /api/checkout works the distance out again from the pin.
  *
  * GET /api/delivery/distance?q=...
  * Returns popular + Nominatim suggestions for the picker.
@@ -166,25 +168,9 @@ async function reverseGeocode(lat: number, lng: number): Promise<GeoHit | null> 
   }
 }
 
-async function roadKmViaOsrm(dest: LatLng, hub: LatLng): Promise<number | null> {
-  try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${hub.lng},${hub.lat};${dest.lng},${dest.lat}?overview=false`;
-    const res = await externalFetch(url, { Accept: 'application/json' });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const meters = data?.routes?.[0]?.distance;
-    if (!Number.isFinite(meters) || meters <= 0) return null;
-    return Math.max(0.5, Math.round((meters / 1000) * 10) / 10);
-  } catch {
-    return null;
-  }
-}
-
-/** Google Distance Matrix first (when keyed), then OSRM. */
+/** Google (when keyed), then OSRM: same routing checkout charges on. */
 async function roadKm(dest: LatLng, hub: LatLng): Promise<number | null> {
-  const googleKm = await googleDrivingKm(hub, dest);
-  if (googleKm != null) return googleKm;
-  return roadKmViaOsrm(dest, hub);
+  return routedKm(hub, dest);
 }
 
 type ResolveInput = {
@@ -197,17 +183,6 @@ type ResolveInput = {
   /** Pass a pre-started routing promise to overlap it with geocoding. */
   kmPromise?: Promise<number | null>;
 };
-
-// Hub → transport station barely changes; route it once per process.
-let stationKmCache: { key: string; km: number } | null = null;
-
-async function hubToStationKm(hub: LatLng, station: LatLng): Promise<number> {
-  const key = `${hub.lat},${hub.lng}>${station.lat},${station.lng}`;
-  if (stationKmCache?.key === key) return stationKmCache.km;
-  const km = (await roadKm(station, hub)) ?? estimateRoadKm(haversineKm(hub, station));
-  stationKmCache = { key, km };
-  return km;
-}
 
 async function resolveDistance(input: ResolveInput) {
   const { hub, transportStation } = await getDeliverySettings();

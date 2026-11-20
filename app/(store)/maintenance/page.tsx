@@ -1,3 +1,11 @@
+import type { Metadata } from 'next';
+import { CONTACT_EMAIL, PHONE_PRIMARY_TEL, TELEGRAM_URL, WHATSAPP_URL } from '@/components/legal/business-facts';
+
+export const metadata: Metadata = {
+  title: 'Down for maintenance',
+  robots: { index: false, follow: false },
+};
+
 export default function MaintenancePage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-amber-50 flex items-center justify-center px-4">
@@ -10,19 +18,8 @@ export default function MaintenancePage() {
             We'll Be Right Back
           </h1>
           <p className="text-xl text-gray-600 mb-8 leading-relaxed">
-            We're currently performing scheduled maintenance to improve your shopping experience. We'll be back online shortly.
+            We're doing some maintenance on the shop and will be back online as soon as we can.
           </p>
-        </div>
-
-        <div className="bg-white border border-gray-200 rounded-2xl p-8 mb-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-4">Expected Downtime</h2>
-          <div className="flex items-center justify-center gap-3 text-blue-700">
-            <i className="ri-time-line text-3xl"></i>
-            <div className="text-left">
-              <p className="text-sm text-gray-600">Estimated completion</p>
-              <p className="text-2xl font-bold">30 minutes</p>
-            </div>
-          </div>
         </div>
 
         <div className="grid md:grid-cols-3 gap-6 mb-8">
@@ -54,18 +51,18 @@ export default function MaintenancePage() {
         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-8 mb-8">
           <h3 className="text-xl font-bold text-gray-900 mb-4">Need Immediate Assistance?</h3>
           <p className="text-gray-600 mb-6">
-            Our customer service team is still available to help you
+            Our team is still available during opening hours. WhatsApp is the quickest way to reach us.
           </p>
           <div className="flex flex-wrap gap-4 justify-center">
             <a
-              href="mailto:info@gsgbrands.com.gh"
+              href={`mailto:${CONTACT_EMAIL}`}
               className="inline-flex items-center gap-2 bg-white text-gray-900 px-6 py-3 rounded-full font-medium hover:bg-gray-50 transition-colors border border-gray-200 whitespace-nowrap"
             >
               <i className="ri-mail-line"></i>
               Email Us
             </a>
             <a
-              href="https://wa.me/233246033792"
+              href={WHATSAPP_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 bg-blue-700 text-white px-6 py-3 rounded-full font-medium hover:bg-blue-800 transition-colors whitespace-nowrap"
@@ -74,7 +71,7 @@ export default function MaintenancePage() {
               WhatsApp
             </a>
             <a
-              href="tel:+233246033792"
+              href={`tel:${PHONE_PRIMARY_TEL}`}
               className="inline-flex items-center gap-2 bg-white text-gray-900 px-6 py-3 rounded-full font-medium hover:bg-gray-50 transition-colors border border-gray-200 whitespace-nowrap"
             >
               <i className="ri-phone-line"></i>
@@ -84,19 +81,12 @@ export default function MaintenancePage() {
         </div>
 
         <div className="text-gray-500 text-sm">
-          <p className="mb-2">Thank you for your patience</p>
-          <p>Follow us on social media for real-time updates</p>
-          <div className="flex gap-4 justify-center mt-4">
-            <a href="https://www.instagram.com/mey_phua" target="_blank" rel="noopener noreferrer" className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors">
-              <i className="ri-instagram-line text-gray-600"></i>
-            </a>
-            <a href="https://x.com/mey_phua" target="_blank" rel="noopener noreferrer" className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors">
-              <i className="ri-twitter-fill text-gray-600"></i>
-            </a>
-            <a href="https://www.tiktok.com/@mey_phua" target="_blank" rel="noopener noreferrer" className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors">
-              <i className="ri-tiktok-fill text-gray-600"></i>
-            </a>
-          </div>
+          <p className="mb-2">Thank you for your patience.</p>
+          <p>
+            For updates, message us on{' '}
+            <a href={TELEGRAM_URL} target="_blank" rel="noopener noreferrer" className="text-gsg-purple font-semibold hover:underline">Telegram</a>
+            {' '}or <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className="text-gsg-purple font-semibold hover:underline">WhatsApp</a>.
+          </p>
         </div>
       </div>
     </div>

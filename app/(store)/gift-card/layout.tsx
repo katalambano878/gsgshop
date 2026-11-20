@@ -1,9 +1,10 @@
 import { createPageMetadata } from '@/lib/seo';
 
 export const metadata = createPageMetadata({
-  title: 'Gift Cards',
-  description: 'Buy GSG gift cards for friends and family. Redeemable on groceries, household essentials and more at GSG Convenience Goods & More.',
+  title: 'Gift cards not available',
+  description: 'GSG Convenience Goods & More does not sell gift cards.',
   path: '/gift-card',
+  noindex: true,
 });
 
 export default function GiftCardLayout({ children }: { children: React.ReactNode }) {

@@ -1,14 +1,15 @@
 /**
  * HTML sanitization utilities to prevent XSS.
  */
+import { isGhanaPhone } from '@/lib/phone';
 
 /**
  * Escape HTML special characters to prevent XSS injection.
  * Use this when inserting user-provided text into HTML templates.
  */
-export function escapeHtml(str: string): string {
-    if (!str) return '';
-    return str
+export function escapeHtml(str: unknown): string {
+    if (str === null || str === undefined) return '';
+    return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
@@ -56,14 +57,8 @@ export function isValidEmail(email: string): boolean {
  * Validate Ghana phone number format
  */
 export function isValidGhanaPhone(phone: string): boolean {
-    if (!phone || typeof phone !== 'string') return false;
-    const cleaned = phone.replace(/\D/g, '');
-    // Valid formats: 0XXXXXXXXX (10 digits), 233XXXXXXXXX (12 digits), or 9 digits without prefix
-    return (
-        (cleaned.length === 10 && cleaned.startsWith('0')) ||
-        (cleaned.length === 12 && cleaned.startsWith('233')) ||
-        cleaned.length === 9
-    );
+    // One rule everywhere: lib/phone.ts (Ghana mobile numbers only).
+    return isGhanaPhone(phone);
 }
 
 /**

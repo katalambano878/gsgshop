@@ -1,20 +1,44 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { supabase } from '@/lib/supabase';
+import { supabase, syncAdminSessionCookie } from '@/lib/supabase';
 import { useRecaptcha } from '@/hooks/useRecaptcha';
 
 export default function AdminLoginPage() {
-  const router = useRouter();
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50" />}>
+      <AdminLoginForm />
+    </Suspense>
+  );
+}
+
+function AdminLoginForm() {
+  const searchParams = useSearchParams();
+  const urlError = searchParams?.get('error') || '';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const { getToken, verifying } = useRecaptcha();
+
+  // Only follow a redirect back into the dashboard: a same-site path under
+  // /admin, never a protocol-relative (//host) or absolute URL, never login.
+  const safeRedirect = (): string => {
+    const raw = searchParams?.get('redirect') || '';
+    if (!raw.startsWith('/admin') || raw.startsWith('//') || raw.includes('\\')) return '/admin';
+    try {
+      const url = new URL(raw, window.location.origin);
+      const inAdmin = url.pathname === '/admin' || url.pathname.startsWith('/admin/');
+      if (url.origin !== window.location.origin || !inAdmin || url.pathname.startsWith('/admin/login')) return '/admin';
+      return url.pathname + url.search + url.hash;
+    } catch {
+      return '/admin';
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,15 +62,21 @@ export default function AdminLoginPage() {
       if (error) throw error;
 
       if (data.session) {
-        // Set auth cookie so middleware can verify the session server-side
-        document.cookie = `sb-access-token=${data.session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax; Secure`;
-        document.cookie = `sb-refresh-token=${data.session.refresh_token}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax; Secure`;
-
-        router.push('/admin');
-        router.refresh();
+        // The cookie the middleware reads, written the same way lib/supabase.ts
+        // does (Secure only on https). Then a full page load so the server
+        // check sees it.
+        syncAdminSessionCookie(data.session);
+        window.location.assign(safeRedirect());
+        return;
       }
     } catch (err: any) {
-      setError(err.message || 'Login failed');
+      const msg = err?.message || 'Login failed';
+      const lower = msg.toLowerCase();
+      if (lower.includes('invalid login') || lower.includes('invalid credentials')) {
+        setError('Wrong email or password.');
+      } else {
+        setError(msg);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -66,6 +96,27 @@ export default function AdminLoginPage() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+          {urlError === 'session_expired' && !error && (
+            <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3" role="status">
+              <i className="ri-time-line text-amber-600 text-lg mt-0.5"></i>
+              <p className="text-amber-800 text-sm">Your session expired. Please sign in again.</p>
+            </div>
+          )}
+          {urlError === 'unauthorized' && !error && (
+            <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3" role="status">
+              <i className="ri-shield-user-line text-amber-600 text-lg mt-0.5"></i>
+              <div>
+                <p className="text-amber-800 font-bold text-sm">No dashboard access</p>
+                <p className="text-amber-700 text-xs mt-1">This account is not a staff or admin account. Ask an admin to give you access, or sign in with a different account.</p>
+              </div>
+            </div>
+          )}
+          {urlError === 'no_profile' && !error && (
+            <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3" role="status">
+              <i className="ri-error-warning-line text-amber-600 text-lg mt-0.5"></i>
+              <p className="text-amber-800 text-sm">We could not load your account details. Please sign in again, or ask an admin to check your account.</p>
+            </div>
+          )}
           {error && (
             <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3">
               <i className="ri-error-warning-fill text-red-600 text-lg mt-0.5"></i>
@@ -78,13 +129,15 @@ export default function AdminLoginPage() {
 
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label className="block text-sm font-bold text-gsg-black mb-2">
+              <label htmlFor="admin-email" className="block text-sm font-bold text-gsg-black mb-2">
                 Email Address
               </label>
               <div className="relative">
                 <i className="ri-mail-line absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
                 <input
+                  id="admin-email"
                   type="email"
+                  autoComplete="username"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full pl-12 pr-4 py-3 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none border-gray-200 bg-gray-50 focus:bg-white"
@@ -95,13 +148,15 @@ export default function AdminLoginPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-gsg-black mb-2">
+              <label htmlFor="admin-password" className="block text-sm font-bold text-gsg-black mb-2">
                 Password
               </label>
               <div className="relative">
                 <i className="ri-lock-line absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg"></i>
                 <input
+                  id="admin-password"
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-12 pr-12 py-3 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none border-gray-200 bg-gray-50 focus:bg-white"
@@ -110,6 +165,7 @@ export default function AdminLoginPage() {
                 />
                 <button
                   type="button"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gsg-purple transition-colors"
                 >

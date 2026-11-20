@@ -6,14 +6,21 @@ import { META_FEED_URL } from '@/lib/meta-sync';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/admin/meta — admin: Meta & WhatsApp settings (never the token).
- * PUT /api/admin/meta — admin: save them. accessToken (catalogue) and
- *     whatsappToken: a string replaces it, null removes it, omitted keeps it.
+ * GET /api/admin/meta — administrators only: Meta & WhatsApp settings
+ *     (never the tokens; only whether each is set and its last four characters).
+ * PUT /api/admin/meta — administrators only: save them. accessToken
+ *     (catalogue) and whatsappToken: a string replaces it, null removes it,
+ *     omitted keeps it.
+ * Staff get 403: the tokens control the store's WhatsApp number and catalogue.
  */
 
 async function unauthorized(request: Request) {
-    const auth = await verifyAuth(request, { requireAdmin: true });
-    return auth.authenticated ? null : NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    const auth = await verifyAuth(request, { requireRole: 'admin' });
+    if (auth.authenticated) return null;
+    return NextResponse.json(
+        { success: false, error: auth.user ? 'Only an administrator can manage Meta and WhatsApp settings.' : 'Unauthorized' },
+        { status: auth.user ? 403 : 401, headers: { 'Cache-Control': 'no-store' } }
+    );
 }
 
 export async function GET(request: Request) {
@@ -47,6 +54,6 @@ export async function PUT(request: Request) {
         return NextResponse.json({ success: true, settings: toView(settings), feedUrl: META_FEED_URL });
     } catch (err: any) {
         console.error('[admin/meta] save failed:', err?.message);
-        return NextResponse.json({ success: false, error: err?.message || 'Failed to save' }, { status: 500 });
+        return NextResponse.json({ success: false, error: 'The settings could not be saved. Please try again.' }, { status: 500 });
     }
 }

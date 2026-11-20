@@ -7,7 +7,7 @@ export const SITE_TAGLINE = 'Premium Convenience Shopping in Ghana';
 export const SHOPPER_SITE_NAME = 'My Personal Shopper by GSG';
 
 export const DEFAULT_DESCRIPTION =
-  'Shop groceries, household essentials, personal care, stationery, electronics and more online in Ghana. Fast delivery across Accra and nationwide from GSG Convenience Goods & More.';
+  'Shop groceries, household essentials, personal care and everyday convenience goods online from GSG Convenience Goods & More. Pickup or delivery in and around Accra; other regions via an Accra transport station.';
 
 export const DEFAULT_KEYWORDS = [
   'GSG Convenience Goods & More',
@@ -21,8 +21,28 @@ export const DEFAULT_KEYWORDS = [
   'delivery Accra',
   'stationery shop Ghana',
   'personal care products Ghana',
-  'phones and electronics Ghana',
 ];
+
+/** Opening hours (Mon–Fri 05:00–14:00, Saturday 05:00–09:00), as schema.org data. */
+export const OPENING_HOURS_SPEC = [
+  {
+    '@type': 'OpeningHoursSpecification',
+    dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    opens: '05:00',
+    closes: '14:00',
+  },
+  {
+    '@type': 'OpeningHoursSpecification',
+    dayOfWeek: ['Saturday'],
+    opens: '05:00',
+    closes: '09:00',
+  },
+];
+
+/** JSON for a <script type="application/ld+json"> block, safe against "</script>". */
+export function jsonLd(data: unknown): string {
+  return JSON.stringify(data).replace(/</g, '\\u003c');
+}
 
 /** Canonical public origin for the goods storefront (Search Console property). */
 export function getSiteUrl(): string {
@@ -124,7 +144,7 @@ export function productSeoDescription(product: {
     product.categoryName && product.categoryName !== 'Shop'
       ? ` from our ${product.categoryName.trim()} range`
       : '';
-  return `Buy ${product.name}${price}${category} at GSG Convenience Goods & More. Order online in Ghana with pickup in Accra or delivery nationwide.`.slice(0, 160);
+  return `Buy ${product.name}${price}${category} at GSG Convenience Goods & More. Order online with pickup or delivery in Accra.`.slice(0, 160);
 }
 
 /** Indexable static storefront routes for sitemap.xml */
@@ -142,7 +162,6 @@ export const STORE_STATIC_ROUTES: {
   { path: '/shipping', changeFrequency: 'monthly', priority: 0.75 },
   { path: '/returns', changeFrequency: 'monthly', priority: 0.65 },
   { path: '/blog', changeFrequency: 'weekly', priority: 0.7 },
-  { path: '/gift-card', changeFrequency: 'monthly', priority: 0.6 },
   { path: '/help', changeFrequency: 'monthly', priority: 0.55 },
   { path: '/terms', changeFrequency: 'yearly', priority: 0.3 },
   { path: '/privacy', changeFrequency: 'yearly', priority: 0.3 },
@@ -166,15 +185,13 @@ export function generateOrganizationSchema() {
     contactPoint: {
       '@type': 'ContactPoint',
       contactType: 'customer service',
-      telephone: '+233-246-033-792',
+      telephone: '+233-24-603-3792',
+      email: 'info@gsgbrands.com.gh',
       areaServed: 'GH',
       availableLanguage: ['English'],
+      hoursAvailable: OPENING_HOURS_SPEC,
     },
-    sameAs: [
-      'https://facebook.com/gsgbrandsgh',
-      'https://instagram.com/gsgbrandsgh',
-      'https://twitter.com/gsgbrandsgh',
-    ],
+    sameAs: ['https://t.me/gsgbrandsgh'],
   };
 }
 
@@ -209,7 +226,9 @@ export function generateOnlineStoreSchema() {
     description: DEFAULT_DESCRIPTION,
     priceRange: 'GHS',
     currenciesAccepted: 'GHS',
-    paymentAccepted: 'Mobile Money, Card',
+    paymentAccepted: 'Mobile Money, Credit Card, Debit Card',
+    telephone: '+233-24-603-3792',
+    openingHoursSpecification: OPENING_HOURS_SPEC,
     areaServed: {
       '@type': 'Country',
       name: 'Ghana',

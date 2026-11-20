@@ -7,6 +7,8 @@ import { useRouter } from 'next/navigation';
 import PasswordStrengthMeter from '@/components/PasswordStrengthMeter';
 import { supabase } from '@/lib/supabase';
 import { useRecaptcha } from '@/hooks/useRecaptcha';
+import { isGhanaPhone, normalizeGhanaPhone } from '@/lib/phone';
+import { safeInternalPath } from '../safe-next';
 
 function getFriendlyError(message: string): string {
   const lower = message.toLowerCase();
@@ -39,15 +41,20 @@ export default function SignupPage() {
     password: '',
     confirmPassword: '',
     acceptTerms: false,
-    newsletter: false
   });
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errors, setErrors] = useState<any>({});
   const [isLoading, setIsLoading] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [success, setSuccess] = useState(false);
   const { getToken, verifying } = useRecaptcha();
+
+  const [redirectTo, setRedirectTo] = useState('/account');
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setRedirectTo(safeInternalPath(params.get('redirect') || params.get('next'), '/account'));
+  }, []);
+  const loginHref = redirectTo !== '/account' ? `/auth/login?redirect=${encodeURIComponent(redirectTo)}` : '/auth/login';
 
   // Auto-scroll to error when it appears
   useEffect(() => {
@@ -72,6 +79,8 @@ export default function SignupPage() {
     }
     if (!formData.phone) {
       newErrors.phone = 'Phone number is required';
+    } else if (!isGhanaPhone(formData.phone)) {
+      newErrors.phone = 'Enter a Ghana mobile number, for example 024 603 3792';
     }
     if (!formData.password) {
       newErrors.password = 'Password is required';
@@ -99,71 +108,55 @@ export default function SignupPage() {
       return;
     }
 
+    const firstName = formData.firstName.trim();
+    const lastName = formData.lastName.trim();
+    const phone = normalizeGhanaPhone(formData.phone) || formData.phone.trim();
+
     try {
       const { data, error } = await supabase.auth.signUp({
-        email: formData.email,
+        email: formData.email.trim(),
         password: formData.password,
         options: {
           data: {
-            first_name: formData.firstName,
-            last_name: formData.lastName,
-            phone: formData.phone,
-            newsletter: formData.newsletter
+            first_name: firstName,
+            last_name: lastName,
+            phone,
           }
         }
       });
 
       if (error) throw error;
 
-      if (data.user) {
-        // Send Welcome Notification
-        fetch('/api/notifications', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'welcome',
-            payload: {
-              email: formData.email,
-              firstName: formData.firstName
-            }
-          })
-        }).catch(err => console.error('Welcome notification error:', err));
-        // If Supabase confirms via email, data.session might be null initially
-        if (!data.session) {
-          setSuccess(true);
-        } else {
-          // Auto-login success (if email confirming is off)
-          router.push('/account');
-          router.refresh();
-        }
+      // Sign-up never returns a session (so it cannot reveal who is registered): sign in now.
+      const signIn = await supabase.auth.signInWithPassword({
+        email: formData.email.trim(),
+        password: formData.password,
+      });
+      if (signIn.error || !signIn.data.session) {
+        setAuthError("We couldn't create an account with this email. If you already have one, sign in, or contact us on WhatsApp.");
+        return;
       }
+      const userId = signIn.data.session.user.id;
+      // Save the name and phone on the profile too, so the shop sees them.
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ full_name: `${firstName} ${lastName}`.trim(), phone, updated_at: new Date().toISOString() })
+        .eq('id', userId);
+      if (profileError) console.error('Profile save after sign-up failed:', profileError.message);
+      void data;
+      router.push(redirectTo);
+      router.refresh();
     } catch (err: any) {
       console.error('Signup error:', err);
-      setAuthError(getFriendlyError(err.message || 'Failed to sign up. Please try again.'));
+      const code = String(err?.code || '');
+      if (code === 'weak_password') setAuthError('Your password must be at least 8 characters.');
+      else if (code === 'validation_failed') setAuthError('Please enter a valid email address.');
+      else if (err?.status === 429) setAuthError('Too many attempts. Please wait a few minutes and try again.');
+      else setAuthError(getFriendlyError(err?.message || 'Failed to sign up. Please try again.'));
     } finally {
       setIsLoading(false);
     }
   };
-
-  if (success) {
-    return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6">
-        <div className="max-w-md w-full text-center bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-          <div className="w-20 h-20 bg-purple-50 rounded-full flex items-center justify-center mx-auto mb-6">
-            <i className="ri-mail-send-line text-4xl text-gsg-purple"></i>
-          </div>
-          <h1 className="text-3xl font-bold text-gsg-black mb-4">Check Your Email</h1>
-          <p className="text-gray-500 mb-8 leading-relaxed">
-            We've sent a confirmation link to <strong className="text-gsg-black">{formData.email}</strong>.<br />
-            Please check your inbox to activate your account.
-          </p>
-          <Link href="/auth/login" className="inline-block bg-gsg-purple text-white px-8 py-3 rounded-full font-bold hover:bg-gsg-purple-dark transition-colors shadow-lg hover:shadow-xl hover:-translate-y-0.5">
-            Back to Login
-          </Link>
-        </div>
-      </main>
-    );
-  }
 
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6">
@@ -189,32 +182,36 @@ export default function SignupPage() {
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-bold text-gsg-black mb-2">
+                <label htmlFor="signup-first-name" className="block text-sm font-bold text-gsg-black mb-2">
                   First Name
                 </label>
                 <input
                   type="text"
+                  id="signup-first-name"
                   value={formData.firstName}
+                  aria-invalid={!!errors.firstName}
                   onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
                   className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none ${errors.firstName ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50 focus:bg-white'
                     }`}
-                  placeholder="John"
+                  autoComplete="given-name"
                 />
                 {errors.firstName && (
                   <p className="text-xs text-red-500 mt-1 font-medium">{errors.firstName}</p>
                 )}
               </div>
               <div>
-                <label className="block text-sm font-bold text-gsg-black mb-2">
+                <label htmlFor="signup-last-name" className="block text-sm font-bold text-gsg-black mb-2">
                   Last Name
                 </label>
                 <input
                   type="text"
+                  id="signup-last-name"
                   value={formData.lastName}
+                  aria-invalid={!!errors.lastName}
                   onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
                   className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none ${errors.lastName ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50 focus:bg-white'
                     }`}
-                  placeholder="Doe"
+                  autoComplete="family-name"
                 />
                 {errors.lastName && (
                   <p className="text-xs text-red-500 mt-1 font-medium">{errors.lastName}</p>
@@ -223,12 +220,15 @@ export default function SignupPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-gsg-black mb-2">
-                Email Address
-              </label>
+              <label htmlFor="signup-email" className="block text-sm font-bold text-gsg-black mb-2">
+                  Email Address
+                </label>
               <input
                 type="email"
+                id="signup-email"
+                autoComplete="email"
                 value={formData.email}
+                aria-invalid={!!errors.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none ${errors.email ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50 focus:bg-white'
                   }`}
@@ -240,16 +240,20 @@ export default function SignupPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-gsg-black mb-2">
-                Phone Number
-              </label>
+              <label htmlFor="signup-phone" className="block text-sm font-bold text-gsg-black mb-2">
+                  Phone Number
+                </label>
               <input
                 type="tel"
+                id="signup-phone"
                 value={formData.phone}
+                aria-invalid={!!errors.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none ${errors.phone ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50 focus:bg-white'
                   }`}
-                placeholder="+233 XX XXX XXXX"
+                placeholder="024 XXX XXXX"
+                inputMode="tel"
+                autoComplete="tel"
               />
               {errors.phone && (
                 <p className="text-xs text-red-500 mt-1 font-medium">{errors.phone}</p>
@@ -257,13 +261,16 @@ export default function SignupPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-gsg-black mb-2">
-                Password
-              </label>
+              <label htmlFor="signup-password" className="block text-sm font-bold text-gsg-black mb-2">
+                  Password
+                </label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
+                  id="signup-password"
+                  autoComplete="new-password"
                   value={formData.password}
+                  aria-invalid={!!errors.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   className={`w-full px-4 py-3 pr-12 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none ${errors.password ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50 focus:bg-white'
                     }`}
@@ -272,6 +279,7 @@ export default function SignupPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                   className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gsg-purple transition-colors"
                 >
                   <i className={`${showPassword ? 'ri-eye-off-line' : 'ri-eye-line'} text-xl`}></i>
@@ -284,13 +292,16 @@ export default function SignupPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-gsg-black mb-2">
-                Confirm Password
-              </label>
+              <label htmlFor="signup-confirm-password" className="block text-sm font-bold text-gsg-black mb-2">
+                  Confirm Password
+                </label>
               <div className="relative">
                 <input
                   type={showConfirmPassword ? 'text' : 'password'}
+                  id="signup-confirm-password"
+                  autoComplete="new-password"
                   value={formData.confirmPassword}
+                  aria-invalid={!!errors.confirmPassword}
                   onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                   className={`w-full px-4 py-3 pr-12 border rounded-xl focus:ring-2 focus:ring-gsg-purple focus:border-gsg-purple transition-all outline-none ${errors.confirmPassword ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50 focus:bg-white'
                     }`}
@@ -299,6 +310,7 @@ export default function SignupPage() {
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
                   className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gsg-purple transition-colors"
                 >
                   <i className={`${showConfirmPassword ? 'ri-eye-off-line' : 'ri-eye-line'} text-xl`}></i>
@@ -346,37 +358,9 @@ export default function SignupPage() {
             </button>
           </form>
 
-          <div className="mt-8">
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-4 bg-white text-gray-500 font-medium">Or sign up with</span>
-              </div>
-            </div>
-
-            <div className="mt-6 grid grid-cols-2 gap-4">
-              <button
-                disabled
-                className="flex items-center justify-center space-x-2 border border-gray-200 bg-gray-50 py-3 rounded-xl cursor-not-allowed opacity-60 hover:bg-gray-100 transition-colors"
-              >
-                <i className="ri-google-fill text-xl text-red-500"></i>
-                <span className="font-bold text-gray-600">Google</span>
-              </button>
-              <button
-                disabled
-                className="flex items-center justify-center space-x-2 border border-gray-200 bg-gray-50 py-3 rounded-xl cursor-not-allowed opacity-60 hover:bg-gray-100 transition-colors"
-              >
-                <i className="ri-facebook-circle-fill text-xl text-blue-600"></i>
-                <span className="font-bold text-gray-600">Facebook</span>
-              </button>
-            </div>
-          </div>
-
           <p className="mt-8 text-center text-gray-600 text-sm">
             Already have an account?{' '}
-            <Link href="/auth/login" className="text-gsg-purple hover:text-gsg-purple-dark font-bold hover:underline">
+            <Link href={loginHref} className="text-gsg-purple hover:text-gsg-purple-dark font-bold hover:underline">
               Sign in
             </Link>
           </p>

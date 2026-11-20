@@ -1,189 +1,104 @@
 import { NextResponse } from 'next/server';
 import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '@/lib/rate-limit';
-import { loadPaymentTarget, refKind } from '@/lib/payment-target';
+import { loadPaymentTarget, paidCovers, providerRefs, refKind } from '@/lib/payment-target';
 import { finalizePayment } from '@/lib/payment-finalize';
 
 /**
- * Paystack — verify a transaction after the customer is redirected back from
- * the hosted card page. Called from /order-success and /shopper/payment-complete.
+ * POST /api/payment/paystack/verify — { orderNumber } or { requestNumber }.
  *
- * SECURITY:
- *   - The redirect itself is never proof of payment. We always re-verify with
- *     the Paystack API using PAYSTACK_SECRET_KEY.
- *   - Amount comparison: Paystack returns `data.amount` in pesewas — we
- *     convert target.amount (cedis) to pesewas before comparing.
- *   - Currency must be GHS.
+ * Asks Paystack only about the references THIS order/request issued; any
+ * reference in the body is ignored. Paid only when Paystack says success,
+ * echoes the same reference, the currency is GHS and the amount (pesewas) is
+ * present and covers the stored total.
  *
- * Verify endpoint:
- *   GET https://api.paystack.co/transaction/verify/:reference
- *   Auth: Authorization: Bearer <secret>
- *   Success when: response.status === true && data.status === 'success'
+ * 200 → { success: <paid?>, payment_status, status, message } (no contact details)
  */
 export async function POST(req: Request) {
     try {
         const clientId = getClientIdentifier(req);
         const rateLimitResult = checkRateLimit(`verify:${clientId}`, RATE_LIMITS.payment);
-
         if (!rateLimitResult.success) {
-            return NextResponse.json(
-                { success: false, message: 'Too many requests' },
-                { status: 429 }
-            );
+            return NextResponse.json({ success: false, message: 'Too many requests' }, { status: 429 });
         }
 
-        const { orderNumber, reference } = await req.json().catch(() => ({}));
-
-        if (!orderNumber || typeof orderNumber !== 'string') {
-            return NextResponse.json({ success: false, message: 'Missing or invalid orderNumber' }, { status: 400 });
+        const body = await req.json().catch(() => ({}));
+        const ref = typeof body?.requestNumber === 'string' ? body.requestNumber.trim()
+            : typeof body?.orderNumber === 'string' ? body.orderNumber.trim() : '';
+        if (!ref || !refKind(ref)) {
+            return NextResponse.json({ success: false, message: 'Missing or invalid order number' }, { status: 400 });
         }
 
-        const kind = refKind(orderNumber);
-        if (!kind) {
-            return NextResponse.json({ success: false, message: 'Invalid order number format' }, { status: 400 });
-        }
+        const target = await loadPaymentTarget(ref);
+        if (!target) return NextResponse.json({ success: false, message: 'Order not found' }, { status: 404 });
 
-        console.log('[Paystack/Verify] Checking', kind, 'payment for:', orderNumber, '| ref hint:', reference);
+        const reply = (paid: boolean, message: string) =>
+            NextResponse.json({ success: paid, payment_status: target.payment_status, status: target.status, message });
 
-        const target = await loadPaymentTarget(orderNumber);
-        if (!target) {
-            console.error('[Paystack/Verify] Target not found:', orderNumber);
-            return NextResponse.json({ success: false, message: 'Order not found' }, { status: 404 });
-        }
-
-        if (target.payment_status === 'paid') {
-            console.log('[Paystack/Verify] Already paid:', orderNumber);
-            return NextResponse.json({
-                success: true,
-                payment_status: 'paid',
-                message: 'Order already paid',
-            });
-        }
-
-        // Reject targets initiated against another provider so we don't
-        // accidentally credit a Moolre order off a stale Paystack reference.
-        if (target.payment_method && target.payment_method !== 'paystack') {
-            return NextResponse.json(
-                { success: false, message: 'This order does not use Paystack payment' },
-                { status: 400 }
-            );
-        }
+        if (target.payment_status === 'paid') return reply(true, 'Payment received');
 
         const secretKey = process.env.PAYSTACK_SECRET_KEY;
         if (!secretKey) {
-            console.error('[Paystack/Verify] Missing PAYSTACK_SECRET_KEY');
+            console.error('[Paystack/Verify] PAYSTACK_SECRET_KEY is not configured');
             return NextResponse.json(
-                {
-                    success: false,
-                    payment_status: target.payment_status,
-                    message: 'Payment verification unavailable',
-                },
-                { status: 503 }
+                { success: false, payment_status: target.payment_status, status: target.status, message: 'Payment check unavailable' },
+                { status: 503 },
             );
         }
 
-        // Try multiple references in priority order:
-        //  1. Whatever the redirect URL gave us (Paystack echoes ?reference=)
-        //  2. The unique ref we persisted at init time
-        //  3. The bare merchant ref, in case init never wrote metadata
-        const candidates: string[] = [];
-        if (typeof reference === 'string' && reference) candidates.push(reference);
-        const lastRef = (target.metadata as any)?.last_payment_ref;
-        if (lastRef) candidates.push(lastRef);
-        candidates.push(orderNumber);
-        const uniqueCandidates = Array.from(new Set(candidates));
+        const refs = providerRefs(target, 'paystack').slice(0, 5);
+        if (refs.length === 0) return reply(false, 'No card payment has been started for this order.');
 
-        let paystackVerified = false;
-        let paystackTransactionId: string | null = null;
-        let lastResponse: any = null;
-
-        for (const candidate of uniqueCandidates) {
+        for (const candidate of refs) {
+            let json: any = null;
             try {
-                const checkResponse = await fetch(
-                    `https://api.paystack.co/transaction/verify/${encodeURIComponent(candidate)}`,
-                    {
-                        method: 'GET',
-                        headers: {
-                            Authorization: `Bearer ${secretKey}`,
-                            'Content-Type': 'application/json',
-                        },
-                    }
-                );
-
-                const checkResult = await checkResponse.json().catch(() => ({}));
-                lastResponse = checkResult;
-                console.log(
-                    '[Paystack/Verify] Status for',
-                    candidate,
-                    ':',
-                    JSON.stringify(checkResult).slice(0, 400)
-                );
-
-                const data = checkResult?.data || {};
-                const isSuccess = checkResult?.status === true && data?.status === 'success';
-                if (!isSuccess) continue;
-
-                if (data.currency && String(data.currency).toUpperCase() !== 'GHS') {
-                    console.error('[Paystack/Verify] CURRENCY MISMATCH:', data.currency, 'for', candidate);
-                    continue;
-                }
-
-                if (data.amount !== undefined && data.amount !== null) {
-                    const paidPesewas = Number(data.amount);
-                    const expectedPesewas = Math.round(Number(target.amount) * 100);
-                    if (Number.isFinite(paidPesewas) && Math.abs(paidPesewas - expectedPesewas) > 1) {
-                        console.error(
-                            '[Paystack/Verify] AMOUNT MISMATCH! Expected pesewas:',
-                            expectedPesewas,
-                            'Got:',
-                            paidPesewas,
-                            'for ref',
-                            candidate
-                        );
-                        continue;
-                    }
-                }
-
-                paystackVerified = true;
-                paystackTransactionId = String(data.id || data.reference || candidate);
-                break;
-            } catch (paystackError: any) {
-                console.warn('[Paystack/Verify] API check failed for', candidate, ':', paystackError?.message);
+                const res = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(candidate)}`, {
+                    headers: { Authorization: `Bearer ${secretKey}` },
+                    signal: AbortSignal.timeout(8000),
+                });
+                json = await res.json().catch(() => null);
+            } catch {
+                continue;
             }
-        }
+            const d = json?.data || {};
+            if (json?.status !== true || d?.status !== 'success') continue;
+            if (String(d.reference || '') !== candidate) {
+                console.warn('[Paystack/Verify] reply reference does not match for', target.ref);
+                continue;
+            }
+            if (String(d.currency || '').toUpperCase() !== 'GHS') {
+                console.error('[Paystack/Verify] currency is not GHS for', target.ref);
+                continue;
+            }
+            const pesewas = d.amount === undefined || d.amount === null ? NaN : Number(d.amount);
+            const paid = Number.isFinite(pesewas) ? pesewas / 100 : null;
+            if (!paidCovers(paid, target.amount)) {
+                console.error('[Paystack/Verify] amount missing or short for', target.ref, '| paid:', paid, '| due:', target.amount);
+                continue;
+            }
 
-        if (!paystackVerified) {
-            console.log(
-                '[Paystack/Verify] Cannot verify payment for:',
-                orderNumber,
-                '| last response:',
-                JSON.stringify(lastResponse).slice(0, 200)
-            );
-            return NextResponse.json({
-                success: false,
-                payment_status: target.payment_status,
-                message: 'Payment not yet confirmed by payment provider',
+            const result = await finalizePayment({
+                target,
+                provider: 'paystack',
+                transactionId: d.id !== undefined && d.id !== null ? String(d.id) : null,
+                paidAmount: paid,
             });
+            if (result.ok) {
+                return NextResponse.json({
+                    success: true,
+                    payment_status: 'paid',
+                    status: result.row?.status ?? target.status,
+                    message: 'Payment received',
+                });
+            }
+            if (result.code === 'db_error') {
+                return NextResponse.json({ success: false, payment_status: target.payment_status, status: target.status, message: 'Could not update the order' }, { status: 500 });
+            }
+            return reply(false, result.code === 'closed' ? 'This order is closed. Please contact us about your payment.' : 'Payment could not be applied to this order.');
         }
 
-        console.log('[Paystack/Verify] Marking paid:', orderNumber, '| Paystack tx:', paystackTransactionId);
-
-        const result = await finalizePayment({
-            target,
-            provider: 'paystack',
-            transactionId: paystackTransactionId,
-        });
-        if (!result.ok) {
-            return NextResponse.json({ success: false, message: 'Failed to update order' }, { status: 500 });
-        }
-
-        return NextResponse.json({
-            success: true,
-            status: target.kind === 'order' ? 'processing' : 'PAID',
-            payment_status: 'paid',
-            message: 'Payment verified and order updated',
-        });
+        return reply(false, 'Payment not yet confirmed by the payment provider');
     } catch (error: any) {
-        console.error('[Paystack/Verify] Error:', error?.message || error);
+        console.error('[Paystack/Verify] error:', error?.name || 'error');
         return NextResponse.json({ success: false, message: 'Internal error' }, { status: 500 });
     }
 }

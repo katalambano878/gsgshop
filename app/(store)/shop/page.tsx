@@ -43,7 +43,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
         title: `${name}: Buy Online in Ghana`,
         description:
           category.description?.trim() ||
-          `Shop ${name} online at GSG Convenience Goods & More. Order in Ghana with pickup in Accra or delivery nationwide.`,
+          `Shop ${name} online at GSG Convenience Goods & More. Pickup in Accra or delivery in and around Accra.`,
         path: `/shop?category=${encodeURIComponent(categorySlug)}`,
         keywords: [name, `buy ${name} Ghana`, `${name} Accra`],
       });
@@ -53,7 +53,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
   return createPageMetadata({
     title: 'Shop All Products',
     description:
-      'Browse groceries, household essentials, personal care, stationery, electronics and fashion. Filter by category, price and rating. Shop online with delivery across Ghana.',
+      'Browse groceries, household essentials, personal care and other everyday convenience goods. Filter by category and price. Pickup in Accra or delivery in and around Accra.',
     path: '/shop',
     keywords: ['shop online Ghana', 'GSG products', 'buy groceries Accra', 'online store'],
   });

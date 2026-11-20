@@ -11,18 +11,19 @@ import { usePageTitle } from '@/hooks/usePageTitle';
 import HomeHeroCategoryNav, { type HomeCategoryNode } from '@/components/HomeHeroCategoryNav';
 import { shopperUrl } from '@/lib/site-urls';
 import { SHOPPER_REDIRECT_CATEGORIES, shopperCategoryHref } from '@/lib/shopper-categories';
+import { isPurchasable, sellableStock, stockCount } from '@/context/stock';
 
-const MAIN_GOODS_SLUGS = [
-  'grocery', 'household-essentials', 'personal-care', 'stationery',
-  'phones-electronics', 'fashion-clothing',
-];
+const NO_IMAGE =
+  "data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Crect width=%27100%27 height=%27100%27 fill=%27%23f3f4f6%27/%3E%3C/svg%3E";
+const FEATURED_COLUMNS =
+  'id, name, slug, price, compare_at_price, quantity, track_quantity, continue_selling, status, moq, featured, created_at, product_variants(id, name, price, quantity, option2), product_images(url, position)';
+
+const MAIN_GOODS_SLUGS = ['grocery', 'household-essentials', 'personal-care', 'stationery'];
 const FALLBACK_HOME_CATEGORY_ROWS = [
   { id: 'fallback-grocery', name: 'Groceries & Pantry', slug: 'grocery', image_url: null, parent_id: null },
   { id: 'fallback-household', name: 'Household Essentials', slug: 'household-essentials', image_url: null, parent_id: null },
   { id: 'fallback-personal-care', name: 'Personal Care', slug: 'personal-care', image_url: null, parent_id: null },
   { id: 'fallback-stationery', name: 'Stationery & Office', slug: 'stationery', image_url: null, parent_id: null },
-  { id: 'fallback-electronics', name: 'Phones & Electronics', slug: 'phones-electronics', image_url: null, parent_id: null },
-  { id: 'fallback-fashion', name: 'Fashion & Clothing', slug: 'fashion-clothing', image_url: null, parent_id: null },
 ];
 const DELIVERY_OPTIONS = [
   { id: 'pickup', title: 'Pickup', desc: 'No delivery fee. Daily after confirmation.', href: '/shipping#pickup', icon: 'ri-store-2-line' },
@@ -37,6 +38,8 @@ export default function HomePageClient() {
   const [categories, setCategories] = useState<any[]>([]);
   const [allCategories, setAllCategories] = useState<any[]>(FALLBACK_HOME_CATEGORY_ROWS);
   const [loading, setLoading] = useState(true);
+  const [productsError, setProductsError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [currentHeroImage, setCurrentHeroImage] = useState(0);
   const HERO_IMAGES = ['/hero-1.png', '/hero-2.png', '/slider-1.png', '/slider-2.png', '/slider-3.png'];
@@ -50,13 +53,20 @@ export default function HomePageClient() {
 
   useEffect(() => {
     async function fetchData() {
+      setLoading(true);
+      setProductsError(false);
       try {
         const [productsRes, categoriesRes, allCatRes] = await Promise.all([
-          supabase.from('products').select('*, product_variants(*), product_images(*)').eq('status', 'active').eq('featured', true).order('created_at', { ascending: false }).limit(12),
+          supabase.from('products').select(FEATURED_COLUMNS).eq('status', 'active').eq('featured', true).order('created_at', { ascending: false }).limit(12),
           supabase.from('categories').select('id, name, slug, image_url, metadata').eq('status', 'active').order('position').order('name'),
           supabase.from('categories').select('id, name, slug, image_url, parent_id').eq('status', 'active').order('position').order('name'),
         ]);
-        if (!productsRes.error) setFeaturedProducts(productsRes.data || []);
+        if (productsRes.error) {
+          console.error('Featured products failed to load:', productsRes.error);
+          setProductsError(true);
+        } else {
+          setFeaturedProducts(productsRes.data || []);
+        }
         const featured = (categoriesRes.data || []).filter((c: any) => c.metadata?.featured === true);
         setCategories(featured.length > 0 ? featured : (categoriesRes.data || []).slice(0, 8));
         if (!allCatRes.error && (allCatRes.data || []).length > 0) {
@@ -64,12 +74,13 @@ export default function HomePageClient() {
         }
       } catch (e) {
         console.error(e);
+        setProductsError(true);
       } finally {
         setLoading(false);
       }
     }
     fetchData();
-  }, []);
+  }, [reloadKey]);
 
   const mainGoods = allCategories.filter((c) => MAIN_GOODS_SLUGS.some((s) => (c.slug || '').toLowerCase().includes(s))).slice(0, 11);
   const showMainGoods = mainGoods.length > 0 ? mainGoods : allCategories.slice(0, 10);
@@ -144,7 +155,7 @@ export default function HomePageClient() {
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
                   </span>
-                  Now delivering to all regions
+                  Delivering in and around Accra
                 </span>
                 
                 <h1 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-white mb-3 leading-[1.08] tracking-tight max-w-lg">
@@ -153,7 +164,7 @@ export default function HomePageClient() {
                 </h1>
                 
                 <p className="text-base text-gray-200/90 mb-7 leading-relaxed max-w-md hidden sm:block">
-                  Trusted everyday essentials with fast, reliable delivery across Ghana.
+                  Everyday essentials with pickup in Accra or delivery in and around Accra.
                 </p>
                 
                 <div className="flex flex-wrap gap-4">
@@ -274,7 +285,7 @@ export default function HomePageClient() {
             {showMainGoods.slice(0, 12).map((cat) => (
               <Link
                 key={cat.id}
-                href={`/shop?category=${cat.slug}`}
+                href={`/shop?category=${encodeURIComponent(cat.slug)}`}
                 className="group relative flex-none w-[140px] sm:w-[160px] aspect-[4/5] snap-start rounded-2xl overflow-hidden bg-white shadow-sm border border-gray-100 hover:shadow-md transition-all"
               >
                 <div className="absolute inset-0 bg-gray-100 group-hover:scale-105 transition-transform duration-500">
@@ -299,13 +310,24 @@ export default function HomePageClient() {
       <section className="py-20 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-bold text-gsg-black mb-4">Trending Now</h2>
-            <p className="text-gray-500 max-w-2xl mx-auto">Discover our most popular products, handpicked for quality and value.</p>
+            <h2 className="text-3xl md:text-4xl font-bold text-gsg-black mb-4">Featured Products</h2>
+            <p className="text-gray-500 max-w-2xl mx-auto">A selection from our shelves.</p>
           </div>
           
           {loading ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
               {[...Array(4)].map((_, i) => <ProductCardSkeleton key={i} />)}
+            </div>
+          ) : productsError ? (
+            <div className="text-center py-12 rounded-2xl border border-dashed border-red-200" role="alert">
+              <p className="text-gray-700 mb-4">We couldn&apos;t load featured products.</p>
+              <button
+                type="button"
+                onClick={() => setReloadKey((k) => k + 1)}
+                className="bg-gsg-purple hover:bg-gsg-purple-dark text-white px-6 py-2.5 rounded-full font-bold"
+              >
+                Retry
+              </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
@@ -313,8 +335,7 @@ export default function HomePageClient() {
                 const variants = product.product_variants || [];
                 const hasVariants = variants.length > 0;
                 const minVariantPrice = hasVariants ? Math.min(...variants.map((v: any) => v.price || product.price)) : undefined;
-                const totalVariantStock = hasVariants ? variants.reduce((s: number, v: any) => s + (v.quantity || 0), 0) : 0;
-                const effectiveStock = hasVariants ? totalVariantStock : product.quantity;
+                const images = [...(product.product_images || [])].sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0));
                 const colorVariants: ColorVariant[] = [];
                 const seen = new Set<string>();
                 for (const v of variants) {
@@ -334,13 +355,11 @@ export default function HomePageClient() {
                       slug={product.slug}
                       name={product.name}
                       price={product.price}
-                      originalPrice={product.compare_at_price}
-                      image={product.product_images?.[0]?.url || 'https://via.placeholder.com/400x500'}
-                      rating={product.rating_avg || 5}
-                      reviewCount={product.review_count || 0}
+                      originalPrice={product.compare_at_price > product.price ? product.compare_at_price : undefined}
+                      image={images[0]?.url || NO_IMAGE}
                       badge={product.featured ? 'Featured' : undefined}
-                      inStock={effectiveStock > 0}
-                      maxStock={effectiveStock || 50}
+                      inStock={isPurchasable(product, variants)}
+                      maxStock={sellableStock(stockCount(product, variants), product)}
                       moq={product.moq || 1}
                       hasVariants={hasVariants}
                       minVariantPrice={minVariantPrice}
@@ -403,7 +422,8 @@ export default function HomePageClient() {
 
       {/* Footer CTA */}
       <section className="py-12 bg-gsg-black text-white text-center border-t border-white/10">
-        <p className="text-lg font-medium mb-2">Need help? WhatsApp & Telegram Active 24/7</p>
+        <p className="text-lg font-medium mb-2">Need help? WhatsApp or call us</p>
+        <p className="text-white/70 text-sm mb-2">Mon–Fri 05:00–14:00 · Sat and holidays 05:00–09:00</p>
         <p className="text-white/80 text-sm">+233 (0) 246 033 792 · +233 (0) 579 033 792 · <a href="https://t.me/gsgbrandsgh" target="_blank" rel="noopener noreferrer" className="text-gsg-accent hover:underline">t.me/gsgbrandsgh</a></p>
       </section>
     </main>

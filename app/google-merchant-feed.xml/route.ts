@@ -28,6 +28,7 @@ type FeedProduct = {
   seo_description: string | null;
   price: number;
   quantity: number;
+  track_quantity: boolean | null;
   continue_selling: boolean | null;
   sku: string | null;
   barcode: string | null;
@@ -42,7 +43,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from('products')
     .select(
-      'id, name, slug, description, seo_description, price, quantity, continue_selling, sku, barcode, brand, categories(name), product_images(url, position), product_variants(price, quantity)'
+      'id, name, slug, description, seo_description, price, quantity, track_quantity, continue_selling, sku, barcode, brand, categories(name), product_images(url, position), product_variants(price, quantity)'
     )
     .eq('status', 'active');
 
@@ -79,7 +80,8 @@ export async function GET() {
         price,
         categoryName: category,
       });
-      const inStock = stock > 0 || !!p.continue_selling;
+      // Sellable rule: untracked stock or continue-selling is always available.
+      const inStock = p.track_quantity === false || !!p.continue_selling || stock > 0;
       const lines = [
         `<g:id>${xml(p.sku || p.id)}</g:id>`,
         `<g:title>${xml(p.name.trim().slice(0, 150))}</g:title>`,

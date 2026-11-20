@@ -13,6 +13,6 @@ export async function GET(request: Request) {
     const products = await fetchProductsForBrain({ search, category });
     return NextResponse.json({ products: products.map(toSafeProduct) });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to load products' }, { status: 500 });
+    return (console.error('[brain] Failed to load products:', error?.code || error?.name || 'error'), NextResponse.json({ error: 'Failed to load products' }, { status: 500 }));
   }
 }

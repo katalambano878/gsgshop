@@ -6,72 +6,105 @@ const supabase = createServerSupabase('anon');
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Public product list (active products only).
+ * GET ?featured=true&limit=1..100&category=<category slug>
+ * 200 [{ id, name, slug, price, compare_at_price, quantity, track_quantity,
+ *        continue_selling, moq, description, metadata, categories, product_images,
+ *        product_variants: [{ id, name, option1, option2, price, quantity }] }]
+ * No cost prices and no draft or archived products.
+ */
+
 // Simple in-memory cache
-let cache: { data: any; timestamp: number } | null = null;
+let cache: { data: Record<string, any>; timestamp: number } | null = null;
 const CACHE_TTL = 15 * 60 * 1000; // 15 minutes — products don't change frequently
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,120}$/i;
+/** Metadata keys that are staff-only and never leave the server. */
+const PRIVATE_META = /cost|supplier|margin|wholesale|internal|note|purchase/i;
+
+function clampLimit(raw: string | null): number {
+    const n = Number.parseInt(raw || '50', 10);
+    if (!Number.isFinite(n)) return 50;
+    return Math.min(100, Math.max(1, n));
+}
+
+function publicMetadata(meta: unknown): Record<string, unknown> {
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(meta as Record<string, unknown>)) {
+        if (!PRIVATE_META.test(k)) out[k] = v;
+    }
+    return out;
+}
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const featured = searchParams.get('featured') === 'true';
-    const limit = parseInt(searchParams.get('limit') || '50');
-    const category = searchParams.get('category');
+    const limit = clampLimit(searchParams.get('limit'));
+    const rawCategory = (searchParams.get('category') || '').trim();
+    const category = SLUG_RE.test(rawCategory) ? rawCategory.toLowerCase() : '';
 
-    // Build a cache key from params
     const cacheKey = `${featured}-${limit}-${category || 'all'}`;
 
-    // Check cache (only for featured/home requests — general shop is more dynamic)
-    if (featured && cache && cache.data?.[cacheKey] && Date.now() - cache.timestamp < CACHE_TTL) {
+    // Cache only featured/home requests — the general shop is more dynamic.
+    if (featured && cache && cache.data[cacheKey] && Date.now() - cache.timestamp < CACHE_TTL) {
         return NextResponse.json(cache.data[cacheKey], {
             headers: {
                 'Cache-Control': 'public, s-maxage=900, stale-while-revalidate=1800',
-                'X-Cache': 'HIT'
-            }
+                'X-Cache': 'HIT',
+            },
         });
     }
 
     try {
-        let query = supabase
+        let categoryId: string | null = null;
+        if (category) {
+            const { data: cat, error: catError } = await supabase
+                .from('categories')
+                .select('id')
+                .eq('slug', category)
+                .eq('status', 'active')
+                .maybeSingle();
+            if (catError) throw new Error(catError.message);
+            if (!cat) return NextResponse.json([]);
+            categoryId = cat.id;
+        }
+
+        let q = supabase
             .from('products')
             .select(`
-                id, name, slug, price, compare_at_price, quantity, description, metadata,
+                id, name, slug, price, compare_at_price, quantity, track_quantity, continue_selling, moq,
+                description, metadata,
                 categories(id, name, slug),
                 product_images(url, position),
-                product_variants(id, name, price, quantity)
+                product_variants(id, name, option1, option2, price, quantity)
             `)
+            .eq('status', 'active')
             .order('created_at', { ascending: false });
 
-        // Always filter active products
-        query = query.eq('status', 'active');
+        if (featured) q = q.eq('featured', true);
+        if (categoryId) q = q.eq('category_id', categoryId);
+        q = q.limit(limit);
+
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+
+        const rows = (data || []).map((p: any) => ({ ...p, metadata: publicMetadata(p.metadata) }));
 
         if (featured) {
-            query = query.eq('featured', true).limit(limit);
-        } else if (category) {
-            // Filter by category slug or name
-            query = query.limit(limit);
-        } else {
-            query = query.limit(limit);
+            if (!cache || Date.now() - cache.timestamp >= CACHE_TTL) cache = { data: {}, timestamp: Date.now() };
+            cache.data[cacheKey] = rows;
         }
 
-        const { data, error } = await query;
-
-        if (error) {
-            console.error('[Storefront API] Products error:', error);
-            return NextResponse.json({ error: 'Failed to fetch products' }, { status: 500 });
-        }
-
-        // Cache the result
-        if (!cache) cache = { data: {}, timestamp: Date.now() };
-        cache.data[cacheKey] = data;
-        cache.timestamp = Date.now();
-
-        return NextResponse.json(data, {
+        return NextResponse.json(rows, {
             headers: {
                 'Cache-Control': 'public, s-maxage=900, stale-while-revalidate=1800',
-                'X-Cache': 'MISS'
-            }
+                'X-Cache': 'MISS',
+            },
         });
     } catch (err: any) {
-        console.error('[Storefront API] Error:', err);
-        return NextResponse.json({ error: err.message }, { status: 500 });
+        console.error('[storefront/products] failed:', err?.message);
+        return NextResponse.json({ error: 'Failed to fetch products' }, { status: 500 });
     }
 }

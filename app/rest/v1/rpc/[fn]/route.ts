@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/db/supabase-compat";
 import { isPlainPostgres } from "@/lib/db/mode";
 import { withTransaction } from "@/lib/db/pool";
-import { resolveActor, withRls, rlsDeniedStatus, isServiceActor, RlsAuthError } from "@/lib/db/rls";
+import { resolveActor, withRls, rlsDeniedStatus, isServiceActor, isPrivilegedActor, RlsAuthError } from "@/lib/db/rls";
+import { checkRateLimit, getClientIdentifier } from "@/lib/rate-limit";
 import { isRpcAllowed, publicError } from "@/lib/db/rest-policy";
 import { absolutizeStorageUrls } from "@/lib/media-url";
 import { becamePaid, lockOrderPaymentStatus, notifyWaPaymentConfirmed } from "@/lib/wa-payment-webhook";
@@ -11,6 +12,11 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const PG_IDENT = /^[a-z_][a-z0-9_]*$/i;
+
+/** Function arguments are small; anything bigger is refused. */
+const MAX_BODY_BYTES = 64 * 1024;
+/** Per-client-IP calls per minute for non-staff callers. */
+const RPC_LIMIT = { maxRequests: 60, windowSeconds: 60 };
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -44,10 +50,10 @@ export async function POST(
     throw e;
   }
 
-  // Browsers may call only the functions the pages call; the service key
-  // (GSG AI agent) may call any function in schema public. Calls are always
-  // schema-qualified as public.<fn>, so pg_catalog functions are never
-  // reachable.
+  // Browsers may call only is_admin_or_staff; the service key (GSG AI
+  // agent) only the functions it uses (lib/db/rest-policy.ts). Calls are
+  // always schema-qualified as public.<fn>, so pg_catalog functions are
+  // never reachable.
   if (!isRpcAllowed(fn, actor)) {
     return NextResponse.json(
       { message: "Function not allowed", code: "42501", details: null, hint: null },
@@ -55,7 +61,29 @@ export async function POST(
     );
   }
 
-  const body = await req.json().catch(() => ({}));
+  if (!isPrivilegedActor(actor)) {
+    const limit = checkRateLimit(`rest-rpc:${getClientIdentifier(req)}`, RPC_LIMIT);
+    if (!limit.success) {
+      return NextResponse.json(
+        { message: "Too many requests. Please wait a minute and try again.", code: "PGRST429", details: null, hint: null },
+        { status: 429, headers: { ...CORS, "Retry-After": String(limit.resetIn || 60) } }
+      );
+    }
+  }
+
+  const raw = await req.text().catch(() => "");
+  if (raw.length > MAX_BODY_BYTES) {
+    return NextResponse.json(
+      { message: "Request body is too large", code: "PGRST413", details: null, hint: null },
+      { status: 413, headers: CORS }
+    );
+  }
+  let body: unknown = {};
+  try {
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    body = {};
+  }
   const args = (body && typeof body === "object" && !Array.isArray(body) ? body : {}) as Record<string, any>;
   const client = createClient();
 

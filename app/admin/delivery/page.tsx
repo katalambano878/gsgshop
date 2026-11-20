@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import AdminOnly from '@/components/admin/AdminOnly';
 import {
   calculateDeliveryFee,
   normalizeDeliveryPricing,
@@ -69,6 +70,14 @@ function toForm(
 }
 
 export default function AdminDeliveryPricingPage() {
+  return (
+    <AdminOnly title="Delivery Pricing">
+      <AdminDeliveryPricingPageInner />
+    </AdminOnly>
+  );
+}
+
+function AdminDeliveryPricingPageInner() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

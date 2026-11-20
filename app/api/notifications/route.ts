@@ -1,234 +1,227 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { query } from '@/lib/db/pool';
 import { verifyAuth } from '@/lib/auth';
-import { escapeHtml } from '@/lib/sanitize';
-import { sendOrderConfirmation, sendOrderStatusUpdate, sendWelcomeMessage, sendContactMessage, sendPaymentLink, sendEmail, sendSMS, emailLayout } from '@/lib/notifications';
+import { sendOrderConfirmation, sendOrderStatusUpdate, sendPaymentLink, sendSMS, smsAccepted } from '@/lib/notifications';
 import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '@/lib/rate-limit';
+import { phoneLast9 } from '@/lib/phone';
+
+export const dynamic = 'force-dynamic';
+
+/**
+ * POST /api/notifications — staff only (admin or staff, Bearer token).
+ * Messages go by SMS. There is no email provider: nothing here sends email.
+ * Every message is built from the database row, never from the request body.
+ *
+ *   { type: 'order_created', payload: { order_number | id } }
+ *       Confirmation SMS for a PAID order, once (metadata.confirmation_sent_at;
+ *       paid orders already get one from the payment step).
+ *   { type: 'order_updated', payload: { order: { id | order_number } } }
+ *   { type: 'order_status',  payload: { orderNumber } }
+ *       Status SMS with the order's stored status.
+ *   { type: 'payment_link',  payload: { id | order_number } }
+ *       Payment link SMS for an unpaid, open order.
+ *   { type: 'campaign', payload: { audience: 'all' | 'newsletter', channels: { sms }, message } }
+ *       → { success, recipients, sent, failed }
+ *   Other responses: { success, message, sms: boolean }
+ *
+ * Removed public types (410): 'contact' (use /api/storefront/contact),
+ * 'welcome'. Any type sent without a staff session → 401/403.
+ *
+ * GET /api/notifications?audienceCount=all|newsletter (staff) → { count }
+ */
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REF_RE = /^[A-Za-z0-9-]{1,80}$/;
+const REMOVED = new Set(['contact', 'welcome']);
+const MAX_CAMPAIGN_RECIPIENTS = 5000;
+
+async function requireStaff(request: Request): Promise<NextResponse | { userId: string | null }> {
+    const auth = await verifyAuth(request, { requireRole: ['admin', 'staff'] });
+    if (!auth.authenticated) {
+        return NextResponse.json(
+            { success: false, error: auth.user ? 'Forbidden' : 'Unauthorized' },
+            { status: auth.user ? 403 : 401 },
+        );
+    }
+    return { userId: auth.user?.id ? String(auth.user.id) : null };
+}
+
+async function loadOrder(ref: unknown): Promise<any | null> {
+    if (typeof ref !== 'string' || !REF_RE.test(ref.trim())) return null;
+    const key = ref.trim();
+    const q = supabaseAdmin
+        .from('orders')
+        .select('id, order_number, email, phone, status, payment_status, total, shipping_address, metadata, created_at');
+    const { data } = UUID_RE.test(key) ? await q.eq('id', key).maybeSingle() : await q.eq('order_number', key).maybeSingle();
+    return data ?? null;
+}
+
+function smsReply(sms: boolean, sentText: string) {
+    return NextResponse.json({
+        success: true,
+        sms,
+        message: sms ? sentText : 'No SMS was sent (no valid phone number on the order, or the SMS gateway refused it).',
+    });
+}
+
+/** Customers with a real phone, one per number (last 9 digits). */
+async function campaignAudience(audience: 'all' | 'newsletter'): Promise<string[]> {
+    const sql =
+        audience === 'newsletter'
+            ? `SELECT c.phone FROM public.customers c
+                 JOIN public.newsletter_subscribers n ON lower(n.email) = lower(c.email) AND n.unsubscribed_at IS NULL
+                WHERE c.phone IS NOT NULL AND length(regexp_replace(c.phone, '\\D', '', 'g')) >= 9`
+            : `SELECT c.phone FROM public.customers c
+                WHERE c.phone IS NOT NULL AND length(regexp_replace(c.phone, '\\D', '', 'g')) >= 9`;
+    const { rows } = await query<{ phone: string }>(sql);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of rows) {
+        const key = phoneLast9(r.phone);
+        if (!key || !/^[25]\d{8}$/.test(key) || seen.has(key)) continue;
+        seen.add(key);
+        out.push(`+233${key}`);
+    }
+    return out;
+}
+
+export async function GET(request: Request) {
+    const staff = await requireStaff(request);
+    if (staff instanceof NextResponse) return staff;
+    const audience = new URL(request.url).searchParams.get('audienceCount');
+    if (audience !== 'all' && audience !== 'newsletter') {
+        return NextResponse.json({ error: 'audienceCount must be all or newsletter' }, { status: 400 });
+    }
+    try {
+        const list = await campaignAudience(audience);
+        return NextResponse.json({ count: list.length });
+    } catch (e: any) {
+        console.error('[notifications] audience count failed:', e?.code || 'error');
+        return NextResponse.json({ error: 'Could not count the audience' }, { status: 500 });
+    }
+}
 
 export async function POST(request: Request) {
     try {
-        // Rate limiting
         const clientId = getClientIdentifier(request);
         const rateLimitResult = checkRateLimit(`notification:${clientId}`, RATE_LIMITS.notification);
-
         if (!rateLimitResult.success) {
             return NextResponse.json(
-                { error: 'Too many requests. Please try again later.' },
-                {
-                    status: 429,
-                    headers: {
-                        'X-RateLimit-Remaining': '0',
-                        'X-RateLimit-Reset': rateLimitResult.resetIn.toString()
-                    }
-                }
+                { success: false, error: 'Too many requests. Please try again later.' },
+                { status: 429, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': rateLimitResult.resetIn.toString() } },
             );
         }
 
-        const body = await request.json();
-        const { type, payload } = body;
+        const body = await request.json().catch(() => ({}));
+        const type = typeof body?.type === 'string' ? body.type : '';
+        const payload = body?.payload && typeof body.payload === 'object' ? body.payload : {};
 
-        if (!type || !payload) {
-            return NextResponse.json({ error: 'Type and payload required' }, { status: 400 });
+        if (REMOVED.has(type)) {
+            return NextResponse.json({ success: false, error: 'This notification type is no longer available' }, { status: 410 });
         }
 
-        // ============================================================
-        // SECURITY: Authentication requirements
-        // Admin-only types require admin auth token
-        // 'order_created' requires a valid order to exist (verified below)
-        // 'contact' is public but rate-limited
-        // ============================================================
-        const adminOnlyTypes = ['campaign', 'order_updated', 'order_status', 'payment_link', 'welcome'];
-        const requiresAdminAuth = adminOnlyTypes.includes(type);
+        const staff = await requireStaff(request);
+        if (staff instanceof NextResponse) return staff;
 
-        if (requiresAdminAuth) {
-            const auth = await verifyAuth(request, { requireAdmin: true });
-            if (!auth.authenticated) {
-                return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
-            }
-        }
-
-        // ============================================================
-        // order_created — verify the order exists in the database
-        // ============================================================
         if (type === 'order_created') {
-            // Verify the order actually exists before sending confirmation
-            if (!payload.order_number && !payload.id) {
-                return NextResponse.json({ error: 'Missing order identifier' }, { status: 400 });
+            const order = await loadOrder(payload.order_number || payload.orderNumber || payload.id);
+            if (!order) return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 });
+            if (order.payment_status !== 'paid') {
+                return NextResponse.json({ success: true, sms: false, message: 'Not sent: the order is not paid yet.' });
             }
-
-            const orderRef = payload.order_number || payload.id;
-            // PostgREST can't cast a non-UUID string to uuid for id.eq.<...>,
-            // so we explicitly pick the right column instead of using .or().
-            const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-            const filterColumn = UUID_RE.test(orderRef) ? 'id' : 'order_number';
-            const { data: order, error: orderError } = await supabaseAdmin
-                .from('orders')
-                .select('id, order_number, created_at')
-                .eq(filterColumn, orderRef)
-                .maybeSingle();
-
-            if (orderError || !order) {
-                return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+            // Claim the send once.
+            const { rowCount } = await query(
+                `UPDATE public.orders SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('confirmation_sent_at', now())
+                  WHERE id = $1 AND NOT (coalesce(metadata, '{}'::jsonb) ? 'confirmation_sent_at')`,
+                [order.id],
+            );
+            if (rowCount === 0) {
+                return NextResponse.json({ success: true, sms: false, message: 'Already sent for this order.' });
             }
-
-            // Verify the order was created recently (within last 10 minutes)
-            const orderAge = Date.now() - new Date(order.created_at).getTime();
-            if (orderAge > 10 * 60 * 1000) {
-                return NextResponse.json({ error: 'Order confirmation can only be sent for recent orders' }, { status: 400 });
-            }
-
-            await sendOrderConfirmation(payload);
-            return NextResponse.json({ success: true, message: 'Order confirmation sent' });
+            const { sms } = await sendOrderConfirmation(order);
+            return smsReply(sms, 'Confirmation SMS sent.');
         }
 
-        if (type === 'order_updated') {
-            const { order, status } = payload;
-            if (!order || !status) {
-                return NextResponse.json({ error: 'Missing order or status' }, { status: 400 });
-            }
-            await sendOrderStatusUpdate(order, status);
-            return NextResponse.json({ success: true, message: 'Status update sent' });
-        }
-
-        // Handle order_status from admin panel
-        if (type === 'order_status') {
-            const { email, name, orderNumber, status, trackingNumber, phone } = payload;
-
-            if (!orderNumber || !status) {
-                return NextResponse.json({ error: 'Missing orderNumber or status' }, { status: 400 });
-            }
-
-            // Fetch full order data
-            const { data: fullOrder } = await supabaseAdmin
-                .from('orders')
-                .select('id, order_number, email, phone, shipping_address, metadata')
-                .eq('order_number', orderNumber)
-                .single();
-
-            const orderData = fullOrder || {
-                order_number: orderNumber,
-                email: email,
-                phone: phone,
-                shipping_address: { firstName: name, phone: phone },
-                metadata: { tracking_number: trackingNumber }
-            };
-
-            if (!orderData.phone && phone) {
-                orderData.phone = phone;
-            }
-
-            await sendOrderStatusUpdate(orderData, status);
-            return NextResponse.json({ success: true, message: 'Status update sent' });
-        }
-
-        if (type === 'welcome') {
-            if (!payload.email) {
-                return NextResponse.json({ error: 'Missing email' }, { status: 400 });
-            }
-            await sendWelcomeMessage(payload);
-            return NextResponse.json({ success: true, message: 'Welcome message sent' });
-        }
-
-        // ============================================================
-        // contact — public but strictly validated and rate-limited
-        // ============================================================
-        if (type === 'contact') {
-            const { name, email, subject, message } = payload;
-            if (!name || !email || !subject || !message) {
-                return NextResponse.json({ error: 'All contact fields required' }, { status: 400 });
-            }
-            // Basic email format check
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                return NextResponse.json({ error: 'Invalid email format' }, { status: 400 });
-            }
-            // Length limits to prevent abuse
-            if (name.length > 100 || subject.length > 200 || message.length > 5000) {
-                return NextResponse.json({ error: 'Input too long' }, { status: 400 });
-            }
-            await sendContactMessage(payload);
-            return NextResponse.json({ success: true, message: 'Contact message sent' });
+        if (type === 'order_updated' || type === 'order_status') {
+            const ref =
+                type === 'order_updated'
+                    ? payload.order?.id || payload.order?.order_number
+                    : payload.orderNumber || payload.orderId;
+            const order = await loadOrder(ref);
+            if (!order) return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 });
+            const { sms } = await sendOrderStatusUpdate(order, String(order.status || ''));
+            return smsReply(sms, 'Status SMS sent.');
         }
 
         if (type === 'payment_link') {
-            if (!payload.id || !payload.order_number) {
-                return NextResponse.json({ error: 'Missing order details' }, { status: 400 });
+            const order = await loadOrder(payload.id || payload.order_number || payload.orderNumber);
+            if (!order) return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 });
+            if (order.payment_status === 'paid') {
+                return NextResponse.json({ success: false, error: 'This order is already paid' }, { status: 409 });
             }
-            await sendPaymentLink(payload);
-            return NextResponse.json({ success: true, message: 'Payment link sent' });
+            if (order.status === 'cancelled' || order.status === 'refunded' || order.payment_status === 'refunded') {
+                return NextResponse.json({ success: false, error: 'This order is closed' }, { status: 409 });
+            }
+            const { sms } = await sendPaymentLink(order);
+            return smsReply(sms, 'Payment link sent by SMS.');
         }
 
-        // ============================================================
-        // campaign — admin only, with HTML sanitization
-        // ============================================================
         if (type === 'campaign') {
-            const { recipients, subject, message, channels } = payload;
-
-            if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
-                return NextResponse.json({ error: 'Recipients required' }, { status: 400 });
-            }
-            if (!subject || !message) {
-                return NextResponse.json({ error: 'Subject and message required' }, { status: 400 });
-            }
-
-            // Deduplicate phone numbers and emails server-side
-            const seenPhones = new Set<string>();
-            const seenEmails = new Set<string>();
-            const results = { email: 0, sms: 0, errors: 0 };
-
-            // SECURITY: Sanitize subject and message to prevent XSS in emails
-            const safeSubject = escapeHtml(subject);
-            const safeMessage = escapeHtml(message);
-
-            for (const recipient of recipients) {
-                try {
-                    // Send email (skip duplicates)
-                    if (channels?.email && recipient.email) {
-                        const emailKey = recipient.email.toLowerCase().trim();
-                        if (!seenEmails.has(emailKey)) {
-                            seenEmails.add(emailKey);
-                            const recipientName = escapeHtml(recipient.name || 'Valued Customer');
-                            const brandedHtml = emailLayout(`
-<h2 style="margin:0 0 16px;color:#111827;font-size:22px;text-align:center;">${safeSubject}</h2>
-<p style="color:#374151;font-size:14px;line-height:1.7;margin:16px 0;">Hi ${recipientName},</p>
-<p style="color:#374151;font-size:14px;line-height:1.7;margin:0 0 16px;">${safeMessage.replace(/\n/g, '</p><p style="color:#374151;font-size:14px;line-height:1.7;margin:0 0 16px;">')}</p>
-`, safeSubject);
-                            await sendEmail({
-                                to: recipient.email,
-                                subject: subject, // Keep original for email subject header
-                                html: brandedHtml
-                            });
-                            results.email++;
-                        }
-                    }
-
-                    // Send SMS (skip duplicates)
-                    if (channels?.sms && recipient.phone) {
-                        const phoneKey = recipient.phone.replace(/[\s\-\(\)\.]+/g, '');
-                        if (!seenPhones.has(phoneKey)) {
-                            seenPhones.add(phoneKey);
-                            await sendSMS({
-                                to: recipient.phone,
-                                message: message // SMS is plain text, no XSS risk
-                            });
-                            results.sms++;
-                        }
-                    }
-                } catch (err: any) {
-                    console.error(`[Campaign] Failed for ${recipient.email || recipient.phone}:`, err.message);
-                    results.errors++;
-                }
+            const audience = payload.audience === 'newsletter' ? 'newsletter' : payload.audience === 'all' ? 'all' : null;
+            const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+            if (!audience) return NextResponse.json({ success: false, error: 'Choose an audience' }, { status: 400 });
+            if (!message) return NextResponse.json({ success: false, error: 'Message required' }, { status: 400 });
+            if (message.length > 640) return NextResponse.json({ success: false, error: 'Message is too long for SMS (640 characters at most)' }, { status: 400 });
+            if (payload.channels?.sms !== true) {
+                return NextResponse.json({ success: false, error: 'Campaigns are sent by SMS: tick SMS.' }, { status: 400 });
             }
 
-            return NextResponse.json({
-                success: true,
-                message: `Campaign sent: ${results.email} emails, ${results.sms} SMS.${results.errors > 0 ? ` (${results.errors} failed)` : ''}`
-            });
+            let recipients: string[];
+            try {
+                recipients = await campaignAudience(audience);
+            } catch (e: any) {
+                console.error('[campaign] audience failed:', e?.code || 'error');
+                return NextResponse.json({ success: false, error: 'Could not build the audience' }, { status: 500 });
+            }
+            if (recipients.length > MAX_CAMPAIGN_RECIPIENTS) {
+                return NextResponse.json(
+                    { success: false, error: `The audience has ${recipients.length} numbers; campaigns are limited to ${MAX_CAMPAIGN_RECIPIENTS}.` },
+                    { status: 400 },
+                );
+            }
+
+            let sent = 0;
+            let failed = 0;
+            const CONCURRENCY = 5;
+            for (let i = 0; i < recipients.length; i += CONCURRENCY) {
+                const batch = recipients.slice(i, i + CONCURRENCY);
+                const results = await Promise.all(
+                    batch.map((to) => sendSMS({ to, message }).then(smsAccepted).catch(() => false)),
+                );
+                for (const ok of results) ok ? sent++ : failed++;
+            }
+
+            // Campaign log (who, when, how many; never the numbers).
+            await supabaseAdmin
+                .from('audit_logs')
+                .insert({
+                    user_id: staff.userId,
+                    action: 'sms_campaign',
+                    entity_type: 'campaign',
+                    details: { audience, recipients: recipients.length, sent, failed, length: message.length },
+                })
+                .then(({ error }) => {
+                    if (error) console.warn('[campaign] log not written:', error.code || 'error');
+                });
+
+            console.log(`[campaign] ${audience}: ${sent} sent, ${failed} failed of ${recipients.length}`);
+            return NextResponse.json({ success: true, recipients: recipients.length, sent, failed });
         }
 
-        return NextResponse.json({ error: 'Invalid notification type' }, { status: 400 });
-
+        return NextResponse.json({ success: false, error: 'Invalid notification type' }, { status: 400 });
     } catch (error: any) {
-        console.error('Notification API Error:', error);
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+        console.error('[notifications] error:', error?.name || 'error');
+        return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
     }
 }

@@ -42,6 +42,9 @@ export default function MobileBottomNav() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [lastScrollY]);
 
+  // Product pages show their own sticky Add to Cart bar in this spot.
+  const hidden = pathname?.startsWith('/product/');
+
   const navItems = [
     {
       href: '/',
@@ -76,6 +79,8 @@ export default function MobileBottomNav() {
       iconInactive: 'ri-user-3-line',
     },
   ];
+
+  if (hidden) return null;
 
   return (
     <nav

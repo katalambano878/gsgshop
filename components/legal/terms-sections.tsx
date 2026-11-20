@@ -168,8 +168,8 @@ export const TERMS_SECTIONS: LegalSection[] = [
         </p>
         <p>
           Acceptance of your order occurs when we send written confirmation by
-          email, SMS, WhatsApp, or in-app message. Until then, we are not
-          contractually bound to fulfil the order.
+          SMS, WhatsApp, or an on-screen confirmation after payment. Until then,
+          we are not contractually bound to fulfil the order.
         </p>
       </>
     ),
@@ -180,13 +180,12 @@ export const TERMS_SECTIONS: LegalSection[] = [
     title: 'Payments',
     body: (
       <>
-        <p>We accept the following payment methods, subject to availability for each Service:</p>
+        <p>On our online shops we accept the following payment methods, paid online at checkout:</p>
         <ul>
-          <li>mobile money (MTN MoMo, Vodafone Cash, AirtelTigo Money, and other supported networks);</li>
-          <li>bank transfer to our verified accounts;</li>
-          <li>supported card networks via our payment partners;</li>
-          <li>cash on delivery, where explicitly offered at checkout.</li>
+          <li>mobile money (MTN MoMo, Telecel Cash and AirtelTigo Money) through our payment partner Moolre;</li>
+          <li>debit and credit cards (Visa, Mastercard, Verve) through our payment partner Paystack.</li>
         </ul>
+        <p>We do not accept cash on delivery, bank transfers or instalment payments for online orders.</p>
         <p>
           By providing payment information, you confirm that you are authorised
           to use that payment method and that any details you give are
@@ -209,10 +208,11 @@ export const TERMS_SECTIONS: LegalSection[] = [
     body: (
       <>
         <p>
-          We deliver primarily within Greater Accra and are progressively
-          extending coverage across other regions of Ghana. Exact serviceable
-          areas and lead times for each Service are shown at checkout or
-          confirmed by Customer Experience.
+          We deliver within Greater Accra. For other regions of Ghana, we
+          deliver orders to a commercial transport station in Accra; the
+          onward fare from the station is paid by you to the transport company.
+          Delivery methods, fees and lead times for each Service are shown at
+          checkout or confirmed by Customer Experience.
         </p>
         <p>
           Risk in goods passes to you on delivery to the address provided. Title
@@ -274,13 +274,17 @@ export const TERMS_SECTIONS: LegalSection[] = [
         <p>
           We accept returns of goods that are damaged on arrival, materially
           different from the listing, or unsafe to use. Notification must be
-          given within 24 hours of receipt, and goods must be returned in their
-          original condition where possible.
+          given within 24 hours of receipt, by WhatsApp, phone or the returns
+          form on our website, with photos of the goods. Please keep the goods
+          in their original condition until we have agreed the next step with
+          you; we do not issue return labels.
         </p>
         <p>
-          Refunds are processed within 7 working days through the original
-          payment channel where feasible, or via mobile money where the
-          original channel is unavailable.
+          Refunds for cancelled or undeliverable items are returned to the
+          original Mobile Money number or card, normally within 1 to 3 working
+          days. Other agreed refunds are made through the original payment
+          channel where feasible, or via mobile money where the original
+          channel is unavailable.
         </p>
         <p>
           Food, perishables, and personal-care items that have been opened are
@@ -466,8 +470,8 @@ export const TERMS_SECTIONS: LegalSection[] = [
     body: (
       <p>
         We may revise these Terms from time to time. Where the changes are
-        material, we will notify you through reasonable channels — email, SMS,
-        WhatsApp, or a platform notice — before they take effect. Continued use
+        material, we will notify you through reasonable channels, such as SMS,
+        WhatsApp, or a notice on our platforms, before they take effect. Continued use
         of the Services after the effective date confirms your acceptance of
         the revised Terms.
       </p>
@@ -489,7 +493,7 @@ export const TERMS_SECTIONS: LegalSection[] = [
               gsgbrands.com.gh/customer-experience
             </a>
           </li>
-          <li>Office hours — Mon–Fri 05:00–14:00 GMT, with extended slots; see Customer Experience for current windows.</li>
+          <li>Office hours — Mon–Fri 05:00–14:00 GMT, Saturdays and public holidays 05:00–09:00 GMT, with extended slots; see Customer Experience for current windows.</li>
         </ul>
       </>
     ),

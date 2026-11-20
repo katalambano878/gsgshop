@@ -4,7 +4,7 @@ import { SHOPPER_FAQS } from '@/lib/faq-content';
 export const metadata = createShopperPageMetadata({
   title: 'FAQ',
   description:
-    'Answers about My Personal Shopper by GSG — how the service works, the 15% or less Markup, delivery fees, payments, produce sourcing and tracking your request in Ghana.',
+    'Answers about My Personal Shopper by GSG: how the service works, the markup, delivery fees, paying the estimate, produce sourcing and tracking your request.',
   path: '/faqs',
   keywords: ['personal shopper FAQ Ghana', 'markup fee', 'delivery fee Accra'],
 });
@@ -20,7 +20,7 @@ export default function ShopperFAQs() {
     <div className="bg-gray-50 min-h-screen py-12">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema).replace(/</g, '\\u003c') }}
       />
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-12">

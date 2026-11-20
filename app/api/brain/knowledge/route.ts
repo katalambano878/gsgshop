@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { checkRateLimit, getClientIdentifier } from '@/lib/rate-limit';
 import { createServerSupabase } from '@/lib/supabase-server';
 import { getDeliverySettings, SHOPPER_MARKUP_MAX_PCT } from '@/lib/delivery-settings';
 import { STORE_FAQS, SHOPPER_FAQS } from '@/lib/faq-content';
@@ -23,7 +24,11 @@ type CatalogRow = {
   product_variants: { price: number; quantity: number }[] | null;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const rl = checkRateLimit(`brain-knowledge:${getClientIdentifier(request)}`, { maxRequests: 30, windowSeconds: 60 });
+  if (!rl.success) {
+    return NextResponse.json({ success: false, message: 'Too many requests' }, { status: 429 });
+  }
   const supabase = createServerSupabase('anon');
   const [settings, catalog] = await Promise.all([
     getDeliverySettings(),
@@ -106,7 +111,7 @@ export async function GET() {
             name: 'Pickup',
             schedule: 'Daily after confirmation',
             formula: 'GH₵0, no delivery fee',
-            note: 'The pickup location is shown at the confirmation stage; the customer collects at their convenience.',
+            note: `Collect from ${settings.hub.label} once we confirm the order is ready.`,
           },
         ],
       },

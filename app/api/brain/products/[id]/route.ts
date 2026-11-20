@@ -17,6 +17,6 @@ export async function GET(
     }
     return NextResponse.json({ product: toSafeProduct(product) });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to load product' }, { status: 500 });
+    return (console.error('[brain] Failed to load product:', error?.code || error?.name || 'error'), NextResponse.json({ error: 'Failed to load product' }, { status: 500 }));
   }
 }

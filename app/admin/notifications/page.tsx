@@ -1,145 +1,81 @@
 'use client';
 
-import { useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
+import { adminFetch, errorText } from '@/components/admin/adminFetch';
+
+type Audience = 'all' | 'newsletter';
+
+const AUDIENCES: { value: Audience; label: string; note: string }[] = [
+    { value: 'all', label: 'All customers', note: 'Every customer with a real phone number on their record.' },
+    { value: 'newsletter', label: 'Newsletter subscribers', note: 'People who signed up to the newsletter and have not unsubscribed, where we have a phone number for them.' },
+];
+
+const MAX_LENGTH = 480;
 
 export default function NotificationsPage() {
-    const [loading, setLoading] = useState(false);
-    const [success, setSuccess] = useState('');
+    const [audience, setAudience] = useState<Audience>('all');
+    const [message, setMessage] = useState('');
+    const [count, setCount] = useState<number | null>(null);
+    const [countError, setCountError] = useState('');
+    const [confirming, setConfirming] = useState(false);
+    const [sending, setSending] = useState(false);
+    const [result, setResult] = useState<{ recipients: number; sent: number; failed: number } | null>(null);
     const [error, setError] = useState('');
 
-    const [form, setForm] = useState({
-        subject: '',
-        message: '',
-        channels: { email: true, sms: false },
-        audience: 'all'
-    });
+    // The server builds the recipient list; this only asks how many there are.
+    useEffect(() => {
+        let cancelled = false;
+        setCount(null);
+        setCountError('');
+        adminFetch<{ count: number }>(`/api/notifications?audienceCount=${audience}`).then((res) => {
+            if (cancelled) return;
+            if (!res.ok || typeof res.data.count !== 'number') {
+                setCountError(errorText(res.data, 'Could not count recipients.'));
+            } else {
+                setCount(res.data.count);
+            }
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [audience]);
 
-    const handleSend = async (e: React.FormEvent) => {
+    const smsParts = Math.max(1, Math.ceil(message.length / 160));
+    const audienceLabel = AUDIENCES.find((a) => a.value === audience)?.label.toLowerCase() || 'customers';
+    const canSend = !sending && message.trim().length > 0 && count !== null && count > 0;
+
+    const startConfirm = (e: React.FormEvent) => {
         e.preventDefault();
-        setLoading(true);
         setError('');
-        setSuccess('');
+        setResult(null);
+        if (!canSend) return;
+        setConfirming(true);
+    };
 
+    const handleSend = async () => {
+        setSending(true);
+        setError('');
         try {
-            // 1. Get auth token for admin verification
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session?.access_token) {
-                throw new Error('You must be logged in as admin to send campaigns');
-            }
-
-            // 2. Fetch Recipients from the customers table (includes secondary contacts)
-            const { data: customers, error: fetchError } = await supabase
-                .from('customers')
-                .select('email, phone, full_name, secondary_phone, secondary_email');
-
-            if (fetchError) throw fetchError;
-
-            // Build recipients with deduplication
-            const seenPhones = new Set<string>();
-            const seenEmails = new Set<string>();
-
-            const normalizePhone = (p: string) => p.replace(/[\s\-\(\)\.]+/g, '').replace(/^00/, '+');
-
-            const recipients: any[] = [];
-            for (const c of (customers || [])) {
-                const phones = [c.phone, c.secondary_phone].filter(Boolean).map((p: string) => normalizePhone(p));
-                const emails = [c.email, c.secondary_email].filter(Boolean).map((e: string) => e.toLowerCase().trim());
-
-                // Pick first unique phone for this customer
-                const uniquePhone = phones.find(p => !seenPhones.has(p)) || null;
-                if (uniquePhone) seenPhones.add(uniquePhone);
-
-                // Pick first unique email for this customer
-                const uniqueEmail = emails.find(e => !seenEmails.has(e)) || null;
-                if (uniqueEmail) seenEmails.add(uniqueEmail);
-
-                // Also mark all their contact info as seen to avoid duplicates from other customers
-                phones.forEach(p => seenPhones.add(p));
-                emails.forEach(e => seenEmails.add(e));
-
-                const recipient = { email: uniqueEmail, phone: uniquePhone, name: c.full_name };
-
-                // Filter based on selected channels
-                if (form.channels.sms && !form.channels.email && !recipient.phone) continue;
-                if (form.channels.email && !form.channels.sms && !recipient.email) continue;
-                if (!recipient.email && !recipient.phone) continue;
-
-                recipients.push(recipient);
-            }
-
-            if (recipients.length === 0) throw new Error('No recipients found with valid contact info');
-
-            // Confirm before sending
-            const smsCount = recipients.filter(r => r.phone).length;
-            const emailCount = recipients.filter(r => r.email).length;
-            const summary = [];
-            if (form.channels.sms) summary.push(`${smsCount} SMS (deduplicated)`);
-            if (form.channels.email) summary.push(`${emailCount} emails`);
-
-            if (!window.confirm(`This will send ${summary.join(' and ')} to your customers. Continue?`)) {
-                setLoading(false);
+            const res = await adminFetch<{ success: boolean; recipients: number; sent: number; failed: number }>('/api/notifications', {
+                body: {
+                    type: 'campaign',
+                    payload: { audience, channels: { sms: true }, message: message.trim() },
+                },
+            });
+            setConfirming(false);
+            if (!res.ok) {
+                setError(`Campaign not sent: ${errorText(res.data)}`);
                 return;
             }
-
-            // 3. Send in batches to avoid API timeout
-            const BATCH_SIZE = 50;
-            let totalEmail = 0;
-            let totalSms = 0;
-            let totalErrors = 0;
-
-            for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-                const batch = recipients.slice(i, i + BATCH_SIZE);
-
-                const res = await fetch('/api/notifications', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${session.access_token}`
-                    },
-                    body: JSON.stringify({
-                        type: 'campaign',
-                        payload: {
-                            recipients: batch,
-                            subject: form.subject,
-                            message: form.message,
-                            channels: form.channels,
-                        }
-                    })
-                });
-
-                // Handle non-JSON responses (e.g. timeouts, server errors)
-                let data;
-                const contentType = res.headers.get('content-type') || '';
-                if (contentType.includes('application/json')) {
-                    data = await res.json();
-                } else {
-                    const text = await res.text();
-                    throw new Error(`Server error (batch ${Math.floor(i / BATCH_SIZE) + 1}): ${text.slice(0, 100)}`);
-                }
-
-                if (!res.ok) throw new Error(data.error || 'Failed to send');
-
-                // Parse results from response
-                const msg = data.message || '';
-                const emailMatch = msg.match(/(\d+) emails/);
-                const smsMatch = msg.match(/(\d+) SMS/);
-                const errorMatch = msg.match(/(\d+) failed/);
-                if (emailMatch) totalEmail += parseInt(emailMatch[1]);
-                if (smsMatch) totalSms += parseInt(smsMatch[1]);
-                if (errorMatch) totalErrors += parseInt(errorMatch[1]);
-            }
-
-            const resultParts = [];
-            if (totalEmail > 0) resultParts.push(`${totalEmail} emails`);
-            if (totalSms > 0) resultParts.push(`${totalSms} SMS`);
-            const errorNote = totalErrors > 0 ? ` (${totalErrors} failed)` : '';
-            setSuccess(`Campaign sent successfully! ${resultParts.join(', ')} sent.${errorNote}`);
-            setForm(prev => ({ ...prev, subject: '', message: '' }));
-        } catch (err: any) {
-            setError(err.message);
+            const r = {
+                recipients: Number(res.data.recipients || 0),
+                sent: Number(res.data.sent || 0),
+                failed: Number(res.data.failed || 0),
+            };
+            setResult(r);
+            if (r.sent > 0) setMessage('');
         } finally {
-            setLoading(false);
+            setSending(false);
         }
     };
 
@@ -148,84 +84,116 @@ export default function NotificationsPage() {
             <h1 className="text-3xl font-bold text-gray-900 mb-6">Marketing & Notifications</h1>
 
             <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
-                <h2 className="text-xl font-semibold mb-6">Send New Campaign</h2>
+                <h2 className="text-xl font-semibold mb-2">Send an SMS campaign</h2>
+                <p className="text-sm text-gray-600 mb-6">
+                    Campaigns go out by SMS only. The shop has no email sending.
+                </p>
 
-                {success && <div className="bg-blue-50 text-blue-700 p-4 rounded-lg mb-4">{success}</div>}
-                {error && <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-4">{error}</div>}
+                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-900 p-4 rounded-lg mb-6">
+                    <i className="ri-money-dollar-circle-line text-amber-600 text-xl mt-0.5"></i>
+                    <p className="text-sm">
+                        Every SMS costs money from the shop&apos;s SMS balance, and each message longer than 160 characters is charged as more than one.
+                        A campaign cannot be stopped or called back once it is sent.
+                    </p>
+                </div>
 
-                <form onSubmit={handleSend} className="space-y-6">
+                {result && (
+                    <div className={`p-4 rounded-lg mb-4 ${result.sent > 0 ? 'bg-blue-50 text-blue-800' : 'bg-red-50 text-red-700'}`} role="status">
+                        {result.sent > 0
+                            ? `Campaign finished: ${result.sent} of ${result.recipients} SMS sent${result.failed ? `, ${result.failed} failed` : ''}.`
+                            : `Nothing was delivered (${result.failed} failed out of ${result.recipients}). Check the SMS balance and settings.`}
+                    </div>
+                )}
+                {error && <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-4" role="alert">{error}</div>}
+
+                <form onSubmit={startConfirm} className="space-y-6">
                     <div>
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">Audience</label>
+                        <label htmlFor="campaign-audience" className="block text-sm font-semibold text-gray-700 mb-2">Audience</label>
                         <select
-                            value={form.audience}
-                            onChange={e => setForm({ ...form, audience: e.target.value })}
+                            id="campaign-audience"
+                            value={audience}
+                            onChange={e => { setAudience(e.target.value as Audience); setResult(null); }}
                             className="w-full p-3 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
                         >
-                            <option value="all">All Customers</option>
-                            <option value="newsletter">Newsletter Subscribers</option>
+                            {AUDIENCES.map((a) => (
+                                <option key={a.value} value={a.value}>{a.label}</option>
+                            ))}
                         </select>
+                        <p className="text-sm text-gray-500 mt-1">{AUDIENCES.find((a) => a.value === audience)?.note}</p>
+                        <p className="text-sm font-medium text-gray-800 mt-2" aria-live="polite">
+                            {countError
+                                ? <span className="text-red-600">{countError}</span>
+                                : count === null
+                                    ? 'Counting recipients...'
+                                    : `${count} recipient${count === 1 ? '' : 's'} will get this SMS.`}
+                        </p>
                     </div>
-
-                    <div className="flex gap-6 p-4 bg-gray-50 rounded-lg border border-gray-100">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={form.channels.email}
-                                onChange={e => setForm({ ...form, channels: { ...form.channels, email: e.target.checked } })}
-                                className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
-                            />
-                            <span className="font-medium text-gray-900">Send Email</span>
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={form.channels.sms}
-                                onChange={e => setForm({ ...form, channels: { ...form.channels, sms: e.target.checked } })}
-                                className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
-                            />
-                            <span className="font-medium text-gray-900">Send SMS</span>
-                        </label>
-                    </div>
-
-                    {form.channels.email && (
-                        <div>
-                            <label className="block text-sm font-semibold text-gray-700 mb-2">Email Subject</label>
-                            <input
-                                type="text"
-                                value={form.subject}
-                                onChange={e => setForm({ ...form, subject: e.target.value })}
-                                className="w-full p-3 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="e.g., Summer Sale Starts Now!"
-                                required={form.channels.email}
-                            />
-                        </div>
-                    )}
 
                     <div>
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">Message Content</label>
+                        <label htmlFor="campaign-message" className="block text-sm font-semibold text-gray-700 mb-2">Message</label>
                         <textarea
-                            value={form.message}
-                            onChange={e => setForm({ ...form, message: e.target.value })}
+                            id="campaign-message"
+                            value={message}
+                            maxLength={MAX_LENGTH}
+                            onChange={e => setMessage(e.target.value)}
                             className="w-full p-3 border border-gray-300 rounded-lg h-40 outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Write your message here... For emails, this supports plain text."
+                            placeholder="Write your message here..."
                             required
                         />
-                        <p className="text-sm text-gray-500 mt-1">This message will be used for the email body (wrapped in a template) and SMS content (if selected).</p>
+                        <p className="text-sm text-gray-500 mt-1">
+                            {message.length} characters: {smsParts} SMS per person
+                            {count ? ` (about ${smsParts * count} SMS in total)` : ''}.
+                        </p>
                     </div>
 
                     <button
                         type="submit"
-                        disabled={loading || (!form.channels.email && !form.channels.sms)}
+                        disabled={!canSend}
                         className="w-full bg-blue-700 text-white py-4 rounded-lg font-bold text-lg hover:bg-blue-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
-                        {loading ? (
-                            <span className="flex items-center justify-center">
-                                <i className="ri-loader-4-line animate-spin mr-2"></i> Sending...
-                            </span>
-                        ) : 'Send Campaign'}
+                        Review and send
                     </button>
                 </form>
             </div>
+
+            {confirming && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !sending && setConfirming(false)}>
+                    <div
+                        className="bg-white rounded-xl p-6 w-full max-w-md"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="confirm-campaign-title"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h2 id="confirm-campaign-title" className="text-xl font-bold text-gray-900 mb-2">Send this SMS?</h2>
+                        <p className="text-sm text-gray-700 mb-3">
+                            To <strong>{count}</strong> {audienceLabel}: {smsParts} SMS each, about <strong>{smsParts * (count || 0)}</strong> SMS charged to the shop&apos;s balance.
+                        </p>
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-800 whitespace-pre-wrap max-h-48 overflow-y-auto mb-4">
+                            {message.trim()}
+                        </div>
+                        <p className="text-xs text-gray-500 mb-4">Once sent it cannot be undone. Do not press Send twice.</p>
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={() => setConfirming(false)}
+                                disabled={sending}
+                                className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-lg font-semibold cursor-pointer disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleSend}
+                                disabled={sending}
+                                className="px-5 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg font-semibold cursor-pointer disabled:opacity-50"
+                            >
+                                {sending ? (
+                                    <span className="flex items-center"><i className="ri-loader-4-line animate-spin mr-2"></i>Sending...</span>
+                                ) : 'Send'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

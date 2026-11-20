@@ -31,13 +31,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${shopperUrl}/cookies`, lastModified: now, changeFrequency: 'yearly', priority: 0.3 },
   ];
 
-  const blogPages: MetadataRoute.Sitemap = ['1', '2', '3'].map((id) => ({
-    url: absoluteUrl(`/blog/${id}`),
-    lastModified: now,
-    changeFrequency: 'monthly' as const,
-    priority: 0.6,
-  }));
-
+  let blogPages: MetadataRoute.Sitemap = [];
   let productPages: MetadataRoute.Sitemap = [];
   let categoryPages: MetadataRoute.Sitemap = [];
 
@@ -81,6 +75,20 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       }));
     }
 
+    // Only real, published blog posts.
+    const { data: posts } = await supabase
+      .from('blog_posts')
+      .select('id, slug, updated_at, published_at')
+      .eq('status', 'published');
+
+    if (posts) {
+      blogPages = posts.map((post: any) => ({
+        url: absoluteUrl(`/blog/${post.slug || post.id}`),
+        lastModified: new Date(post.updated_at || post.published_at || now),
+        changeFrequency: 'monthly' as const,
+        priority: 0.6,
+      }));
+    }
   } catch (error) {
     console.error('Error generating sitemap:', error);
   }

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { checkRateLimit, getClientIdentifier } from '@/lib/rate-limit';
 import { POST as resolveDistance } from '@/app/api/delivery/distance/route';
 import { getDeliverySettings } from '@/lib/delivery-settings';
 import { calculateDeliveryFee } from '@/lib/delivery-pricing';
@@ -22,8 +23,12 @@ const METHODS = [
 ] as const;
 
 export async function POST(req: Request) {
+  const rl = checkRateLimit(`brain-quote:${getClientIdentifier(req)}`, { maxRequests: 20, windowSeconds: 60 });
+  if (!rl.success) {
+    return NextResponse.json({ success: false, message: 'Too many requests' }, { status: 429 });
+  }
   const body = await req.json().catch(() => ({}));
-  const location = typeof body.location === 'string' ? body.location.trim() : '';
+  const location = typeof body.location === 'string' ? body.location.trim().slice(0, 200) : '';
   const subtotal = Math.max(0, Number(body.subtotal) || 0);
 
   if (!location) {

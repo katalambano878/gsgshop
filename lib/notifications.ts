@@ -1,701 +1,261 @@
-import { Resend } from 'resend';
-import { supabase } from '@/lib/supabase';
-import { escapeHtml } from '@/lib/sanitize';
+/**
+ * Customer messages. The shop reaches customers by SMS (Taysend, falling back
+ * to Moolre SMS). There is no email provider: nothing here sends email, and
+ * no caller may report an email as sent.
+ *
+ * Every send helper builds its text from the row it is given (callers pass
+ * database rows, never request bodies) and returns `{ sms }`: true only when
+ * the gateway accepted the message.
+ */
+import { createServerSupabase } from '@/lib/supabase-server';
 import { getShopperBaseUrl } from '@/lib/site-urls';
 import { isPlaceholderEmail } from '@/lib/placeholder-email';
 
-const resend = new Resend(process.env.RESEND_API_KEY || 'missing_api_key');
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@gsgbrands.com.gh';
-const EMAIL_FROM = process.env.EMAIL_FROM || 'GSG Convenience Goods & More <noreply@gsgbrands.com.gh>';
-const BRAND = {
-    name: 'GSG Convenience Goods & More',
-    color: '#2563eb',
-    colorLight: '#eff6ff',
-    colorDark: '#064e3b',
-    url: (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, ''),
-    phone: '+233246033792',
-};
+export { isPlaceholderEmail };
 
-// Reusable branded email layout
-export function emailLayout(body: string, preheader?: string): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>${BRAND.name}</title>
-${preheader ? `<span style="display:none;max-height:0;overflow:hidden;">${preheader}</span>` : ''}
-</head>
-<body style="margin:0;padding:0;background-color:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;">
-<tr><td align="center" style="padding:24px 16px;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,0.07);">
+export type SendResult = { sms: boolean };
 
-<!-- Header -->
-<tr><td style="background:linear-gradient(135deg,${BRAND.color},${BRAND.colorDark});padding:32px 40px;text-align:center;">
-<h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;letter-spacing:0.5px;">${BRAND.name}</h1>
-<p style="margin:6px 0 0;color:rgba(255,255,255,0.8);font-size:12px;letter-spacing:1.5px;text-transform:uppercase;">Premium Quality Products</p>
-</td></tr>
+const BRAND_NAME = 'GSG Convenience Goods & More';
 
-<!-- Body -->
-<tr><td style="padding:40px 40px 32px;">
-${body}
-</td></tr>
-
-<!-- Footer -->
-<tr><td style="background-color:#f9fafb;padding:24px 40px;border-top:1px solid #e5e7eb;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-<tr><td style="text-align:center;">
-<p style="margin:0 0 8px;color:#6b7280;font-size:13px;">Need help? Contact us at <a href="tel:${BRAND.phone}" style="color:${BRAND.color};text-decoration:none;">${BRAND.phone}</a></p>
-<p style="margin:0 0 12px;color:#6b7280;font-size:13px;"><a href="${BRAND.url}" style="color:${BRAND.color};text-decoration:none;">Visit our store</a> &nbsp;·&nbsp; <a href="${BRAND.url}/order-tracking" style="color:${BRAND.color};text-decoration:none;">Track order</a></p>
-<p style="margin:0;color:#9ca3af;font-size:11px;">&copy; ${new Date().getFullYear()} ${BRAND.name}. All rights reserved.</p>
-</td></tr>
-</table>
-</td></tr>
-
-</table>
-</td></tr>
-</table>
-</body></html>`;
+function storeBaseUrl(): string {
+    return (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
 }
 
-// Reusable styled button
-function emailButton(text: string, href: string, color?: string): string {
-    const bg = color || BRAND.color;
-    return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px auto;"><tr>
-<td style="background-color:${bg};border-radius:8px;"><a href="${href}" target="_blank" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;letter-spacing:0.3px;">${text}</a></td>
-</tr></table>`;
+/** "+2332****92" style, for logs only. */
+export function maskPhoneForLog(phone: string | null | undefined): string {
+    const p = String(phone || '');
+    if (p.length < 6) return '***';
+    return p.slice(0, 4) + '****' + p.slice(-2);
 }
 
-// Reusable info row
-function emailInfoRow(label: string, value: string): string {
-    return `<tr>
-<td style="padding:10px 16px;color:#6b7280;font-size:13px;border-bottom:1px solid #f3f4f6;width:40%;">${label}</td>
-<td style="padding:10px 16px;color:#111827;font-size:14px;font-weight:600;border-bottom:1px solid #f3f4f6;">${value}</td>
-</tr>`;
-}
-
-// Shipping notes block
-function emailShippingNotes(notes: string[]): string {
-    if (notes.length === 0) return '';
-    return `<div style="background-color:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px 16px;margin:20px 0;">
-<p style="font-weight:600;color:#92400e;margin:0 0 6px;font-size:13px;">&#9200; Shipping Notes</p>
-${notes.map(n => `<p style="color:#78350f;margin:3px 0;font-size:13px;">${n}</p>`).join('')}
-</div>`;
-}
-
-// Helper to mask sensitive data in logs
-function maskPhone(phone: string): string {
-    if (!phone || phone.length < 6) return '***';
-    return phone.slice(0, 4) + '****' + phone.slice(-2);
-}
-
-export async function sendEmail({ to, subject, html }: { to: string; subject: string; html: string }) {
-    if (!process.env.RESEND_API_KEY) {
-        console.warn('[Email] RESEND_API_KEY not configured');
-        return null;
-    }
-    // WhatsApp AI orders carry a placeholder address — never mail it.
-    if (isPlaceholderEmail(to)) return null;
-    try {
-        const data = await resend.emails.send({
-            from: EMAIL_FROM,
-            to,
-            subject,
-            html,
-        });
-        console.log('[Email] Sent successfully to:', to.split('@')[0] + '@***');
-        return data;
-    } catch (error: any) {
-        console.error('[Email] Failed:', error.message);
-        return null;
-    }
-}
-
-// Helper to format phone number for SMS (Ghana specific for now)
-// Helper to format phone number for SMS (Ghana specific for now)
+/** E.164 for a Ghana number typed any usual way. */
 function formatPhoneNumber(phone: string): string {
-    // Remove all non-digit characters (including + for now)
-    let cleaned = phone.replace(/\D/g, '');
-
-    // If starts with 0 (e.g. 024...), replace 0 with 233
-    if (cleaned.startsWith('0')) {
-        cleaned = '233' + cleaned.substring(1);
-    }
-
-    // If length is 9 (e.g. 24...), prepend 233
-    if (cleaned.length === 9) {
-        cleaned = '233' + cleaned;
-    }
-
-    // Ensure it starts with correct country code before prepending +
-    if (!cleaned.startsWith('233') && cleaned.length === 12) {
-        // Assuming it's some other format, but if it starts with 233, it's fine.
-    }
-
-    // Return with + prefix as per E.164
+    let cleaned = String(phone || '').replace(/\D/g, '');
+    if (cleaned.startsWith('00')) cleaned = cleaned.slice(2);
+    if (cleaned.startsWith('0')) cleaned = '233' + cleaned.substring(1);
+    if (cleaned.length === 9) cleaned = '233' + cleaned;
     return '+' + cleaned;
 }
 
+/** Plain text only: strips control characters and caps length (SMS is not HTML). */
+function clean(text: unknown, max = 60): string {
+    return String(text ?? '')
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, max);
+}
 
-const TAYSEND_SMS_URL = (process.env.TAYSEND_API_URL || "https://api.taysend.com").replace(/\/+$/, "");
-const TAYSEND_FAILED_STATUSES = new Set(["failed", "rejected", "undelivered", "expired"]);
+const TAYSEND_SMS_URL = (process.env.TAYSEND_API_URL || 'https://api.taysend.com').replace(/\/+$/, '');
+const TAYSEND_FAILED_STATUSES = new Set(['failed', 'rejected', 'undelivered', 'expired']);
 
 async function sendViaTaysend(to: string, message: string, senderFallback?: string) {
     const apiKey = process.env.TAYSEND_API_KEY?.trim();
-    const from = (process.env.TAYSEND_SENDER_ID || senderFallback || process.env.MOOLRE_SMS_SENDER_ID || "").trim();
+    const from = (process.env.TAYSEND_SENDER_ID || senderFallback || process.env.MOOLRE_SMS_SENDER_ID || '').trim();
     if (!apiKey || !from) return null;
     try {
         const response = await fetch(`${TAYSEND_SMS_URL}/v1/messages`, {
-            method: "POST",
+            method: 'POST',
             headers: {
                 Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-                "Idempotency-Key": crypto.randomUUID(),
+                'Content-Type': 'application/json',
+                'Idempotency-Key': crypto.randomUUID(),
             },
-            body: JSON.stringify({ to, sender_id: from, message, type: "transactional" }),
+            body: JSON.stringify({ to, sender_id: from, message, type: 'transactional' }),
             signal: AbortSignal.timeout(15000),
         });
         const result: any = await response.json().catch(() => null);
-        const status = String(result?.status || "").toLowerCase();
+        const status = String(result?.status || '').toLowerCase();
         if (response.ok && result?.id && !TAYSEND_FAILED_STATUSES.has(status)) {
-            return { status: 1, code: "SMS01", provider: "taysend", messageid: result.id, data: [{ messageid: result.id }] };
+            return { status: 1, code: 'SMS01', provider: 'taysend', messageid: result.id, data: [{ messageid: result.id }] };
         }
-        console.warn("[SMS] Taysend failed, falling back:", result?.error?.message || result?.error || status || response.status);
+        console.warn('[SMS] Taysend failed, falling back | HTTP', response.status, '| status:', status || 'none');
         return null;
     } catch (error: any) {
-        console.warn("[SMS] Taysend failed, falling back:", error?.message || error);
+        console.warn('[SMS] Taysend failed, falling back:', error?.name || 'error');
         return null;
     }
 }
 
-export async function sendSMS({
- to, message }: { to: string; message: string }) {
-        const viaTaysend = await sendViaTaysend(formatPhoneNumber(to), message);
+/** Raw send. Returns the gateway result (status 1 = accepted) or null. */
+export async function sendSMS({ to, message }: { to: string; message: string }) {
+    const recipient = formatPhoneNumber(to);
+    const viaTaysend = await sendViaTaysend(recipient, message);
     if (viaTaysend) return viaTaysend;
 
-    // Moolre SMS API only requires X-API-VASKEY header for authentication
-    // See: https://docs.moolre.com/#/send-sms
-    // Allow MOOLRE_SMS_API_KEY or fall back to MOOLRE_API_KEY
     const smsVasKey = process.env.MOOLRE_SMS_API_KEY || process.env.MOOLRE_API_KEY;
-
     if (!smsVasKey) {
-        console.warn('[SMS] Missing MOOLRE_SMS_API_KEY or MOOLRE_API_KEY');
+        console.warn('[SMS] No SMS gateway configured');
         return null;
     }
 
-    const recipient = formatPhoneNumber(to);
-
     try {
-        console.log(`[SMS] Sending to ${maskPhone(recipient)}`);
         const response = await fetch('https://api.moolre.com/open/sms/send', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-VASKEY': smsVasKey
-            },
+            headers: { 'Content-Type': 'application/json', 'X-API-VASKEY': smsVasKey },
             body: JSON.stringify({
                 type: 1,
                 senderid: process.env.SMS_SENDER_ID || 'GSGBRANDS',
-                messages: [
-                    {
-                        recipient: recipient,
-                        message: message
-                    }
-                ]
-            })
+                messages: [{ recipient, message }],
+            }),
+            signal: AbortSignal.timeout(15000),
         });
-
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
-            const text = await response.text();
-            console.error('[SMS] Non-JSON response:', text.slice(0, 200));
-            return { status: 0, error: text.slice(0, 200) };
+            console.error('[SMS] Moolre answered non-JSON | HTTP', response.status);
+            return { status: 0 };
         }
-
         const result = await response.json();
-        console.log('[SMS] Result:', result.status === 1 ? 'Success' : 'Failed', '| Code:', result.code);
-        if (result.status !== 1) {
-            console.log('[SMS] Full Response:', JSON.stringify(result, null, 2));
-        }
+        console.log(`[SMS] ${maskPhoneForLog(recipient)}:`, result?.status === 1 ? 'accepted' : 'refused', '| code:', result?.code ?? 'none');
         return result;
     } catch (error: any) {
-        console.error('[SMS] Error:', error.message);
+        console.error('[SMS] Moolre error:', error?.name || 'error');
         return null;
     }
 }
 
-export async function sendOrderConfirmation(order: any) {
-    const { id, email, phone: orderPhone, shipping_address, total, created_at, order_number, metadata } = order;
+export function smsAccepted(result: any): boolean {
+    return !!result && (result.status === 1 || result.status === '1');
+}
 
-    const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
+async function sms(to: string | null | undefined, message: string): Promise<SendResult> {
+    if (!to || String(to).replace(/\D/g, '').length < 9) return { sms: false };
+    const result = await sendSMS({ to: String(to), message });
+    return { sms: smsAccepted(result) };
+}
 
-    // Build customer name from available sources
-    const getName = () => {
-        // Try shipping_address first
-        if (shipping_address?.full_name) return shipping_address.full_name;
-        if (shipping_address?.firstName) {
-            return shipping_address.lastName
-                ? `${shipping_address.firstName} ${shipping_address.lastName}`
-                : shipping_address.firstName;
-        }
-        // Fall back to metadata
-        if (metadata?.first_name) {
-            return metadata.last_name
-                ? `${metadata.first_name} ${metadata.last_name}`
-                : metadata.first_name;
-        }
-        return 'Customer';
-    };
-    const name = getName();
+function customerName(order: any): string {
+    const a = order?.shipping_address || {};
+    const m = order?.metadata || {};
+    const first = a.firstName || m.first_name || m.customer_name || (a.full_name ? String(a.full_name).split(' ')[0] : '');
+    return clean(first, 30) || 'Customer';
+}
 
-    // Prefer top-level phone, then shipping address phone
-    const phone = orderPhone || shipping_address?.phone;
+function orderPhone(order: any): string | null {
+    return order?.phone || order?.shipping_address?.phone || null;
+}
 
-    // Get tracking number from metadata
-    const trackingNumber = metadata?.tracking_number || '';
-    const trackingUrl = `${baseUrl}/order-tracking?order=${order_number || id}`;
+function trackingUrl(order: any): string {
+    return `${storeBaseUrl()}/order-tracking?order=${encodeURIComponent(String(order?.order_number || order?.id || ''))}`;
+}
 
-    console.log(`[Notification] Preparing for Order #${order_number} | Phone: ${phone ? 'Present' : 'Missing'} | Tracking: ${trackingNumber || 'None'}`);
+/** Payment confirmation SMS. Pass the order row (as stored). */
+export async function sendOrderConfirmation(order: any): Promise<SendResult> {
+    if (!order) return { sms: false };
+    const ref = clean(order.order_number || order.id, 40);
+    const name = customerName(order);
+    const trackingNumber = clean(order.metadata?.tracking_number, 30);
 
-    // Fetch order items to get preorder_shipping info
-    let shippingNotes: string[] = [];
+    // Preorder shipping notes (service client: order_items are not public).
+    let notes = '';
     try {
-        const { data: items } = await supabase
-            .from('order_items')
-            .select('product_name, metadata')
-            .eq('order_id', id);
-        if (items) {
-            for (const item of items) {
-                const preorder = item.metadata?.preorder_shipping;
-                if (preorder) {
-                    shippingNotes.push(`${item.product_name}: ${preorder}`);
-                }
-            }
+        if (order.id) {
+            const { data: items } = await createServerSupabase('service')
+                .from('order_items')
+                .select('product_name, metadata')
+                .eq('order_id', order.id);
+            const lines = (items || [])
+                .filter((i: any) => i?.metadata?.preorder_shipping)
+                .map((i: any) => `${clean(i.product_name, 40)}: ${clean(i.metadata.preorder_shipping, 60)}`);
+            if (lines.length) notes = ` Note: ${lines.join('; ')}.`;
         }
-    } catch (err) {
-        console.warn('[Notification] Could not fetch order items for shipping notes');
+    } catch {
+        /* notes are optional */
     }
 
-    const shippingNotesSms = shippingNotes.length > 0
-        ? ` Note: ${shippingNotes.join('; ')}.`
-        : '';
-
-    // 1. Email to Customer
-    const customerEmailHtml = emailLayout(`
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="width:64px;height:64px;background-color:${BRAND.colorLight};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#10003;</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:24px;">Order Confirmed!</h2>
-  <p style="margin:0;color:#6b7280;font-size:15px;">Thank you for your purchase, ${name}.</p>
-</div>
-
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
-  ${emailInfoRow('Order Number', `#${order_number || id}`)}
-  ${emailInfoRow('Order Date', new Date(created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }))}
-  ${trackingNumber ? emailInfoRow('Tracking', trackingNumber) : ''}
-  ${emailInfoRow('Total', `GH₵${Number(total).toFixed(2)}`)}
-</table>
-
-${emailShippingNotes(shippingNotes)}
-
-<p style="color:#374151;font-size:14px;line-height:1.6;margin:16px 0;">We're getting your order ready. You'll receive updates as it's processed and packaged.</p>
-
-${emailButton('Track Your Order', trackingUrl)}
-
-<p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">Or copy this link: <a href="${trackingUrl}" style="color:${BRAND.color};">${trackingUrl}</a></p>
-`, `Your order #${order_number || id} is confirmed!`);
-
-    await sendEmail({
-        to: email,
-        subject: `Order Confirmed! #${order_number || id}`,
-        html: customerEmailHtml
-    });
-
-    // 2. Email to Admin
-    const adminEmailHtml = emailLayout(`
-<h2 style="margin:0 0 16px;color:#111827;font-size:20px;">&#128230; New Order Received</h2>
-
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:16px 0;">
-  ${emailInfoRow('Order', `#${order_number || id}`)}
-  ${emailInfoRow('Customer', `${name}`)}
-  ${emailInfoRow('Email', email)}
-  ${emailInfoRow('Total', `GH₵${Number(total).toFixed(2)}`)}
-  ${trackingNumber ? emailInfoRow('Tracking', trackingNumber) : ''}
-</table>
-
-${emailShippingNotes(shippingNotes)}
-
-${emailButton('View Order in Admin', `${baseUrl}/admin/orders/${id}`)}
-`, `New order #${order_number} from ${name}`);
-
-    await sendEmail({
-        to: ADMIN_EMAIL,
-        subject: `New Order #${order_number || id}`,
-        html: adminEmailHtml
-    });
-
-    // 3. SMS to Customer (if phone exists)
-    if (phone) {
-        const smsMessage = trackingNumber
-            ? `Hi ${name}, your order #${order_number || id} is confirmed! Tracking: ${trackingNumber}. Track here: ${trackingUrl}${shippingNotesSms}`
-            : `Hi ${name}, your order #${order_number || id} at GSG Convenience Goods & More is confirmed! Track here: ${trackingUrl}${shippingNotesSms}`;
-
-        await sendSMS({
-            to: phone,
-            message: smsMessage
-        });
-    }
+    const message = trackingNumber
+        ? `Hi ${name}, payment received: your order #${ref} is confirmed. Tracking: ${trackingNumber}. Track here: ${trackingUrl(order)}${notes}`
+        : `Hi ${name}, payment received: your order #${ref} at ${BRAND_NAME} is confirmed. Track here: ${trackingUrl(order)}${notes}`;
+    return sms(orderPhone(order), message.slice(0, 600));
 }
 
-export async function sendOrderStatusUpdate(order: any, newStatus: string) {
-    const { id, email, phone: orderPhone, shipping_address, order_number, metadata } = order;
+/** Status update SMS from the stored order row and its stored status. */
+export async function sendOrderStatusUpdate(order: any, newStatus: string): Promise<SendResult> {
+    if (!order) return { sms: false };
+    const ref = clean(order.order_number || order.id, 40);
+    const name = customerName(order);
+    const trackingNumber = clean(order.metadata?.tracking_number, 30);
+    const url = trackingUrl(order);
+    const status = clean(newStatus, 30);
 
-    const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
-
-    // Build customer name from available sources
-    const getName = () => {
-        if (shipping_address?.full_name) return shipping_address.full_name;
-        if (shipping_address?.firstName) {
-            return shipping_address.lastName
-                ? `${shipping_address.firstName} ${shipping_address.lastName}`
-                : shipping_address.firstName;
-        }
-        if (metadata?.first_name) {
-            return metadata.last_name
-                ? `${metadata.first_name} ${metadata.last_name}`
-                : metadata.first_name;
-        }
-        return 'Customer';
-    };
-    const name = getName();
-    const phone = orderPhone || shipping_address?.phone;
-    const trackingNumber = metadata?.tracking_number || '';
-    const trackingUrl = `${baseUrl}/order-tracking?order=${order_number || id}`;
-
-    console.log(`[Notification] Status update for Order #${order_number} to ${newStatus} | Tracking: ${trackingNumber}`);
-
-    const subject = `Order Update #${order_number || id}`;
-    let message = `Your order #${order_number || id} status has been updated to ${newStatus}.`;
-    let smsMessage = message;
-
-    if (newStatus === 'shipped') {
-        message = `Good news! Your order #${order_number || id} has been packaged and is ready.`;
-        smsMessage = trackingNumber
-            ? `Good news ${name}! Order #${order_number || id} has been packaged. Tracking: ${trackingNumber}. Track: ${trackingUrl}`
-            : `Good news ${name}! Order #${order_number || id} has been packaged. Track: ${trackingUrl}`;
-    } else if (newStatus === 'delivered') {
-        message = `Your order #${order_number || id} has been delivered. Enjoy!`;
-        smsMessage = `Hi ${name}, your order #${order_number || id} has been delivered. Enjoy your purchase!`;
-    } else if (newStatus === 'processing') {
-        smsMessage = trackingNumber
-            ? `Hi ${name}, your order #${order_number || id} is being processed. Tracking: ${trackingNumber}. Track: ${trackingUrl}`
-            : `Hi ${name}, your order #${order_number || id} is being processed. Track: ${trackingUrl}`;
+    let message: string;
+    if (status === 'shipped') {
+        message = trackingNumber
+            ? `Good news ${name}! Order #${ref} has been packed and is on its way. Tracking: ${trackingNumber}. Track: ${url}`
+            : `Good news ${name}! Order #${ref} has been packed and is on its way. Track: ${url}`;
+    } else if (status === 'delivered') {
+        message = `Hi ${name}, your order #${ref} has been delivered. Any problem? Tell us on WhatsApp within 24 hours.`;
+    } else if (status === 'processing') {
+        message = trackingNumber
+            ? `Hi ${name}, your order #${ref} is being prepared. Tracking: ${trackingNumber}. Track: ${url}`
+            : `Hi ${name}, your order #${ref} is being prepared. Track: ${url}`;
+    } else if (status === 'cancelled') {
+        message = `Hi ${name}, your order #${ref} has been cancelled. Questions? WhatsApp us on +233 24 603 3792.`;
     } else {
-        smsMessage = `Hi ${name}, order #${order_number || id} status: ${newStatus}. Track: ${trackingUrl}`;
+        message = `Hi ${name}, order #${ref} status: ${status.replace(/_/g, ' ')}. Track: ${url}`;
     }
-
-    // Status icons/colors
-    const statusConfig: Record<string, { icon: string; color: string; bg: string }> = {
-        processing: { icon: '&#9881;', color: '#2563eb', bg: '#eff6ff' },
-        shipped: { icon: '&#128666;', color: '#2563eb', bg: '#eff6ff' },
-        delivered: { icon: '&#127881;', color: '#16a34a', bg: '#f0fdf4' },
-        cancelled: { icon: '&#10060;', color: '#dc2626', bg: '#fef2f2' },
-    };
-    const sc = statusConfig[newStatus] || { icon: '&#128276;', color: '#6b7280', bg: '#f9fafb' };
-
-    await sendEmail({
-        to: email,
-        subject: subject,
-        html: emailLayout(`
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="width:64px;height:64px;background-color:${sc.bg};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">${sc.icon}</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:22px;">Order Update</h2>
-  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${name}, here's an update on your order.</p>
-</div>
-
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
-  ${emailInfoRow('Order Number', `#${order_number || id}`)}
-  ${emailInfoRow('New Status', `<span style="display:inline-block;background-color:${sc.bg};color:${sc.color};padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;text-transform:uppercase;">${newStatus}</span>`)}
-  ${trackingNumber ? emailInfoRow('Tracking Number', trackingNumber) : ''}
-</table>
-
-<p style="color:#374151;font-size:14px;line-height:1.6;margin:16px 0;">${message}</p>
-
-${emailButton('Track Your Order', trackingUrl)}
-`, `Your order #${order_number} is now ${newStatus}`)
-    });
-
-    // SMS
-    if (phone) {
-        await sendSMS({
-            to: phone,
-            message: smsMessage
-        });
-    }
+    return sms(orderPhone(order), message);
 }
 
-export async function sendWelcomeMessage(user: { email: string, firstName: string, phone?: string }) {
-    const { email, firstName, phone } = user;
-
-    // Email
-    await sendEmail({
-        to: email,
-        subject: `Welcome to ${BRAND.name}!`,
-        html: emailLayout(`
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="width:64px;height:64px;background-color:${BRAND.colorLight};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#128075;</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:24px;">Welcome, ${firstName}!</h2>
-  <p style="margin:0;color:#6b7280;font-size:15px;">We're so glad you're here.</p>
-</div>
-
-<p style="color:#374151;font-size:14px;line-height:1.7;margin:16px 0;">Thank you for joining the ${BRAND.name} family. We source premium quality products directly from China at unbeatable prices &mdash; perfect for homes, businesses, and resellers.</p>
-
-<div style="background-color:#f9fafb;border-radius:12px;padding:20px;margin:20px 0;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-    <tr>
-      <td style="text-align:center;padding:8px;width:33%;">
-        <p style="font-size:20px;margin:0 0 4px;">&#128666;</p>
-        <p style="color:#374151;font-size:12px;font-weight:600;margin:0;">Free Pickup</p>
-        <p style="color:#9ca3af;font-size:11px;margin:2px 0 0;">Available in store</p>
-      </td>
-      <td style="text-align:center;padding:8px;width:33%;">
-        <p style="font-size:20px;margin:0 0 4px;">&#9989;</p>
-        <p style="color:#374151;font-size:12px;font-weight:600;margin:0;">Verified Quality</p>
-        <p style="color:#9ca3af;font-size:11px;margin:2px 0 0;">Hand-inspected</p>
-      </td>
-      <td style="text-align:center;padding:8px;width:33%;">
-        <p style="font-size:20px;margin:0 0 4px;">&#128176;</p>
-        <p style="color:#374151;font-size:12px;font-weight:600;margin:0;">Best Prices</p>
-        <p style="color:#9ca3af;font-size:11px;margin:2px 0 0;">Unbeatable value</p>
-      </td>
-    </tr>
-  </table>
-</div>
-
-${emailButton('Start Shopping', `${BRAND.url}/shop`)}
-`, `Welcome to ${BRAND.name}, ${firstName}!`)
-    });
-
-    // SMS
-    if (phone) {
-        await sendSMS({
-            to: phone,
-            message: `Welcome ${firstName}! Thanks for joining GSG Convenience Goods & More.`
-        });
-    }
-}
-
-export async function sendPaymentLink(order: any) {
-    const { id, email, phone: orderPhone, shipping_address, total, order_number, metadata } = order;
-
-    const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
-    const paymentUrl = `${baseUrl}/pay/${id}`;
-
-    // Build customer name from available sources
-    const getName = () => {
-        if (shipping_address?.full_name) return shipping_address.full_name;
-        if (shipping_address?.firstName) {
-            return shipping_address.lastName
-                ? `${shipping_address.firstName} ${shipping_address.lastName}`
-                : shipping_address.firstName;
-        }
-        if (metadata?.first_name) {
-            return metadata.last_name
-                ? `${metadata.first_name} ${metadata.last_name}`
-                : metadata.first_name;
-        }
-        return 'Customer';
-    };
-    const name = getName();
-    const phone = orderPhone || shipping_address?.phone;
-
-    console.log(`[Notification] Sending payment link for Order #${order_number} | Phone: ${phone ? 'Present' : 'Missing'}`);
-
-    // Email with payment link
-    await sendEmail({
-        to: email,
-        subject: `Complete Your Order #${order_number}`,
-        html: emailLayout(`
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="width:64px;height:64px;background-color:#fef3c7;border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#128179;</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:22px;">Complete Your Order</h2>
-  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${name}, your order is waiting for payment.</p>
-</div>
-
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
-  ${emailInfoRow('Order Number', `#${order_number}`)}
-  ${emailInfoRow('Amount Due', `<span style="color:${BRAND.color};font-size:18px;font-weight:700;">GH₵${Number(total).toFixed(2)}</span>`)}
-</table>
-
-<p style="color:#374151;font-size:14px;line-height:1.6;margin:16px 0;">Click the button below to securely complete your payment. This link will remain active until your order is completed or cancelled.</p>
-
-${emailButton('Pay Now — GH₵' + Number(total).toFixed(2), paymentUrl, '#d97706')}
-
-<p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">Or copy this link: <a href="${paymentUrl}" style="color:${BRAND.color};">${paymentUrl}</a></p>
-`, `Complete payment for order #${order_number}`)
-    });
-
-    // SMS with payment link
-    if (phone) {
-        const smsMessage = `Hi ${name}, complete your order #${order_number} (GH₵${Number(total).toFixed(2)}) here: ${paymentUrl}`;
-
-        await sendSMS({
-            to: phone,
-            message: smsMessage
-        });
-    }
-}
-
-export async function sendContactMessage(data: { name: string, email: string, subject: string, message: string }) {
-    const { name, email, subject, message } = data;
-
-    // SECURITY: Sanitize all user input before injecting into HTML
-    const safeName = escapeHtml(name);
-    const safeSubject = escapeHtml(subject);
-    const safeMessage = escapeHtml(message);
-    const safeEmail = escapeHtml(email);
-
-    // 1. Acknowledge to User
-    await sendEmail({
-        to: email,
-        subject: `We received your message: ${subject}`,
-        html: emailLayout(`
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="width:64px;height:64px;background-color:${BRAND.colorLight};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#128172;</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:22px;">Message Received</h2>
-  <p style="margin:0;color:#6b7280;font-size:14px;">We'll get back to you soon.</p>
-</div>
-
-<p style="color:#374151;font-size:14px;line-height:1.7;margin:16px 0;">Hi ${safeName},</p>
-<p style="color:#374151;font-size:14px;line-height:1.7;margin:0 0 16px;">Thank you for reaching out to ${BRAND.name}. We've received your message regarding <strong>"${safeSubject}"</strong> and our team will respond as soon as possible.</p>
-
-<div style="background-color:#f9fafb;border-left:4px solid ${BRAND.color};border-radius:0 8px 8px 0;padding:16px 20px;margin:20px 0;">
-  <p style="color:#6b7280;font-size:12px;margin:0 0 6px;text-transform:uppercase;letter-spacing:0.5px;">Your message</p>
-  <p style="color:#374151;font-size:14px;margin:0;line-height:1.6;">${safeMessage}</p>
-</div>
-
-<p style="color:#6b7280;font-size:13px;margin:16px 0 0;">We typically respond within 24 hours.</p>
-`, `Thanks for contacting us, ${safeName}`)
-    });
-
-    // 2. Alert Admin
-    await sendEmail({
-        to: ADMIN_EMAIL,
-        subject: `Contact: ${subject}`,
-        html: emailLayout(`
-<h2 style="margin:0 0 16px;color:#111827;font-size:20px;">&#128233; New Contact Message</h2>
-
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:16px 0;">
-  ${emailInfoRow('From', safeName)}
-  ${emailInfoRow('Email', `<a href="mailto:${safeEmail}" style="color:${BRAND.color};">${safeEmail}</a>`)}
-  ${emailInfoRow('Subject', safeSubject)}
-</table>
-
-<div style="background-color:#f9fafb;border-left:4px solid ${BRAND.color};border-radius:0 8px 8px 0;padding:16px 20px;margin:20px 0;">
-  <p style="color:#6b7280;font-size:12px;margin:0 0 6px;text-transform:uppercase;letter-spacing:0.5px;">Message</p>
-  <p style="color:#374151;font-size:14px;margin:0;line-height:1.6;">${safeMessage}</p>
-</div>
-
-${emailButton('Reply to ' + safeName, `mailto:${safeEmail}?subject=Re: ${encodeURIComponent(subject)}`)}
-`, `New contact from ${safeName}: ${safeSubject}`)
-    });
+/** Payment link SMS for an unpaid order (link by row id, which is the payment proof). */
+export async function sendPaymentLink(order: any): Promise<SendResult> {
+    if (!order?.id) return { sms: false };
+    const ref = clean(order.order_number || order.id, 40);
+    const name = customerName(order);
+    const total = Number(order.total) || 0;
+    const paymentUrl = `${storeBaseUrl()}/pay/${order.id}`;
+    return sms(orderPhone(order), `Hi ${name}, complete your order #${ref} (GH₵${total.toFixed(2)}) here: ${paymentUrl}`);
 }
 
 // ============================================================
-// Personal-shopper notifications
+// Personal Shopper
 // ============================================================
-// These mirror sendPaymentLink / sendOrderConfirmation but speak in
-// "request" language and live on the shopper subdomain so links and
-// branding stay consistent for that customer.
 
 function shopperPayUrl(req: any): string {
-    const base = getShopperBaseUrl();
-    return `${base}/pay/${req.id}`;
+    return `${getShopperBaseUrl()}/pay/${req.id}`;
 }
 
 function shopperTrackUrl(req: any): string {
-    const base = getShopperBaseUrl();
-    return `${base}/track?id=${req.id}`;
+    // The track page sends `id` to /api/shopper/requests, which accepts an SR number there.
+    return `${getShopperBaseUrl()}/track?id=${encodeURIComponent(String(req.request_number || req.id))}`;
 }
 
-export async function sendShopperPaymentLink(req: any) {
-    const total = Number(req.total_final ?? req.total_est ?? 0);
-    const name = req.contact_name || 'Customer';
-    const phone = req.contact_phone;
-    const email = req.contact_email;
-    const reqRef = req.request_number || req.id;
-    const payUrl = shopperPayUrl(req);
-
-    console.log(`[Notification] Sending shopper payment link for ${reqRef} | Phone: ${phone ? 'present' : 'missing'} | Email: ${email ? 'present' : 'missing'}`);
-
-    if (email) {
-        await sendEmail({
-            to: email,
-            subject: `Confirm & Pay — Personal Shopper Request ${reqRef}`,
-            html: emailLayout(`
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="width:64px;height:64px;background-color:#fef3c7;border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#128722;</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:22px;">Your Shopping List Is Ready</h2>
-  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${escapeHtml(name)}, we've confirmed market prices on your items.</p>
-</div>
-
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
-  ${emailInfoRow('Request', `#${escapeHtml(String(reqRef))}`)}
-  ${emailInfoRow('Total Due', `<span style="color:${BRAND.color};font-size:18px;font-weight:700;">GH₵${total.toFixed(2)}</span>`)}
-</table>
-
-<p style="color:#374151;font-size:14px;line-height:1.6;margin:16px 0;">Tap below to pay securely with Mobile Money or Card. As soon as we receive your payment, our personal shopper will start picking up your items.</p>
-
-${emailButton('Pay Now — GH₵' + total.toFixed(2), payUrl, '#d97706')}
-
-<p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">Or copy this link: <a href="${payUrl}" style="color:${BRAND.color};">${payUrl}</a></p>
-`, `Confirm & pay GH₵${total.toFixed(2)} for shopper request ${reqRef}`),
-        });
-    }
-
-    if (phone) {
-        await sendSMS({
-            to: phone,
-            message: `Hi ${name}, your GSG Personal Shopper request ${reqRef} is ready. Total GH₵${total.toFixed(2)}. Pay here: ${payUrl}`,
-        });
-    }
+function shopperName(req: any): string {
+    return clean(String(req?.contact_name || '').split(' ')[0], 30) || 'Customer';
 }
 
-export async function sendShopperOrderConfirmation(req: any) {
+export async function sendShopperPaymentLink(req: any): Promise<SendResult> {
+    if (!req?.id) return { sms: false };
     const total = Number(req.total_final ?? req.total_est ?? 0);
-    const name = req.contact_name || 'Customer';
-    const phone = req.contact_phone;
-    const email = req.contact_email;
-    const reqRef = req.request_number || req.id;
-    const trackUrl = shopperTrackUrl(req);
+    const reqRef = clean(req.request_number || req.id, 40);
+    return sms(
+        req.contact_phone,
+        `Hi ${shopperName(req)}, your GSG Personal Shopper request ${reqRef} is ready. Total GH₵${total.toFixed(2)}. Pay here: ${shopperPayUrl(req)}`,
+    );
+}
 
-    console.log(`[Notification] Sending shopper payment confirmation for ${reqRef}`);
+export async function sendShopperOrderConfirmation(req: any): Promise<SendResult> {
+    if (!req) return { sms: false };
+    const total = Number(req.total_final ?? req.total_est ?? 0);
+    const reqRef = clean(req.request_number || req.id, 40);
+    return sms(
+        req.contact_phone,
+        `Payment received! Your GSG Personal Shopper request ${reqRef} (GH₵${total.toFixed(2)}) is now being processed. Track: ${shopperTrackUrl(req)}`,
+    );
+}
 
-    if (email) {
-        await sendEmail({
-            to: email,
-            subject: `Payment Received — Personal Shopper Request ${reqRef}`,
-            html: emailLayout(`
-<div style="text-align:center;margin-bottom:24px;">
-  <div style="width:64px;height:64px;background-color:#dcfce7;border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#9989;</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:22px;">Payment Received</h2>
-  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${escapeHtml(name)}, thanks! Your personal shopper is on it.</p>
-</div>
+const SHOPPER_STATUS_TEXT: Record<string, string> = {
+    SHOPPING: 'our shopper is buying your items now',
+    OUT_FOR_DELIVERY: 'your items are on the way',
+    DELIVERED: 'your items have been delivered. Any problem? Tell us on WhatsApp within 24 hours',
+    CANCELLED: 'your request has been cancelled. Questions? WhatsApp us on +233 24 603 3792',
+    AWAITING_CONFIRMATION: 'we have confirmed market prices; please check your request',
+};
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
-  ${emailInfoRow('Request', `#${escapeHtml(String(reqRef))}`)}
-  ${emailInfoRow('Amount Paid', `<span style="color:#16a34a;font-size:18px;font-weight:700;">GH₵${total.toFixed(2)}</span>`)}
-</table>
-
-<p style="color:#374151;font-size:14px;line-height:1.6;margin:16px 0;">We'll keep you posted on shopping progress and delivery. You can also check status any time below.</p>
-
-${emailButton('Track My Request', trackUrl)}
-`, `Payment received for shopper request ${reqRef}`),
-        });
-    }
-
-    if (phone) {
-        await sendSMS({
-            to: phone,
-            message: `Payment received! Your GSG Personal Shopper request ${reqRef} (GH₵${total.toFixed(2)}) is now being processed. Track: ${trackUrl}`,
-        });
-    }
+/** Status SMS for the key shopper steps; other steps send nothing. */
+export async function sendShopperStatusUpdate(req: any, status: string): Promise<SendResult> {
+    const text = SHOPPER_STATUS_TEXT[status];
+    if (!req || !text) return { sms: false };
+    const reqRef = clean(req.request_number || req.id, 40);
+    return sms(req.contact_phone, `Hi ${shopperName(req)}, GSG Personal Shopper ${reqRef}: ${text}. Track: ${shopperTrackUrl(req)}`);
 }

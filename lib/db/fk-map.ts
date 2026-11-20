@@ -111,7 +111,9 @@ export const FK_MAP: Record<string, FkEdge[]> = {
 };
 
 /**
- * Every table/view in the public schema (38). The data API (/rest/v1) only
+ * Every table/view in the public schema (40, with contact_submissions and
+ * newsletter_subscribers from the 2026-11-20 audit fixes; neither has
+ * foreign keys or json columns). The data API (/rest/v1) only
  * touches these, top-level or embedded: anything else (pg_roles, pg_settings,
  * auth.*, storage.*) is refused before any SQL runs.
  */
@@ -125,9 +127,11 @@ export const PUBLIC_TABLES: ReadonlySet<string> = new Set([
   "categories",
   "chat_conversations",
   "cms_content",
+  "contact_submissions",
   "coupons",
   "customers",
   "navigation_items",
+  "newsletter_subscribers",
   "navigation_menus",
   "notifications",
   "order_items",

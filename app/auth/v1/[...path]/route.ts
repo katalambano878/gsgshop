@@ -4,6 +4,9 @@ import {
   signUpWithPassword,
   refreshSession,
   getUserForToken,
+  verifyAccessToken,
+  canChangePasswordWith,
+  verifyCurrentPassword,
   signOutEverywhere,
   updateUserPassword,
   updateUserMetadata,
@@ -23,8 +26,16 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Sign-ups per client IP per hour (Supabase's default is 30/hour per IP).
+// Sign-ups per client IP per hour (Supabase's default is 30/hour per IP;
+// Ghanaian mobile networks put many people behind one address).
 const SIGNUP_IP_LIMIT = { maxRequests: 30, windowSeconds: 3600 };
+// Sign-ups per email address per hour.
+const SIGNUP_EMAIL_LIMIT = { maxRequests: 5, windowSeconds: 3600 };
+// Current-password checks per account per 15 minutes (a stolen session
+// cannot guess the password through the change-password form).
+const CURRENT_PASSWORD_LIMIT = { maxRequests: 5, windowSeconds: 15 * 60 };
+// Token refreshes per client IP per minute.
+const REFRESH_IP_LIMIT = { maxRequests: 120, windowSeconds: 60 };
 
 function cors(): HeadersInit {
   return {
@@ -46,10 +57,16 @@ function failure(err: AuthFailure) {
   return gotrueError(err.message, err.status, err.code);
 }
 
-/** Sign-in attempts per IP and per address (successes count too; failures also feed the lockout). */
-function loginRateLimited(req: NextRequest, email: string): NextResponse | null {
-  const ip = checkRateLimit(`auth-login-ip:${getClientIdentifier(req)}`, RATE_LIMITS.authLoginIp);
-  const addr = email ? checkRateLimit(`auth-login-email:${email}`, RATE_LIMITS.authLoginEmail) : { success: true };
+/**
+ * Sign-in attempts per IP, and per address from that IP (successes count
+ * too; failures also feed the lockout). Never per address alone: that would
+ * let anyone block someone else's sign-in.
+ */
+function loginRateLimited(req: NextRequest, email: string, clientIp: string): NextResponse | null {
+  const ip = checkRateLimit(`auth-login-ip:${clientIp}`, RATE_LIMITS.authLoginIp);
+  const addr = email
+    ? checkRateLimit(`auth-login-email:${email}|${clientIp}`, RATE_LIMITS.authLoginEmail)
+    : { success: true };
   if (ip.success && addr.success) return null;
   return gotrueError("Too many requests. Please wait a minute and try again.", 429, "over_request_rate_limit");
 }
@@ -141,26 +158,30 @@ export async function POST(
     if (grant === "password") {
       const email = String(body.email || "").trim().toLowerCase();
       const password = String(body.password || "");
-      const limited = loginRateLimited(req, email);
+      const clientIp = getClientIdentifier(req);
+      const limited = loginRateLimited(req, email, clientIp);
       if (limited) return limited;
-      // 10 wrong passwords for one address lock it for 15 minutes. Only
-      // failures count, and a correct password clears the count.
-      const lockedFor = loginLockRemaining(email);
+      // 10 wrong passwords for one address from one client IP lock that
+      // pair for 15 minutes. Only failures count, and a correct password
+      // clears the count.
+      const lockedFor = loginLockRemaining(email, clientIp);
       if (lockedFor > 0) {
         return gotrueError(
-          `Too many failed sign-in attempts. Try again in ${Math.ceil(lockedFor / 60)} minutes, or reset your password.`,
+          `Too many failed sign-in attempts. Try again in ${Math.ceil(lockedFor / 60)} minutes, or contact us on WhatsApp for help.`,
           429,
           "over_request_rate_limit"
         );
       }
       const { session, error } = await signInWithPassword(email, password);
-      if (error?.code === "invalid_credentials") recordLoginFailure(email);
-      else if (!error || error.code === "email_not_confirmed") clearLoginFailures(email);
+      if (error?.code === "invalid_credentials") recordLoginFailure(email, clientIp);
+      else if (!error || error.code === "email_not_confirmed") clearLoginFailures(email, clientIp);
       if (error || !session) return failure(error ?? { message: "Invalid login credentials", code: "invalid_credentials", status: 400 });
       return sessionResponse(session);
     }
 
     if (grant === "refresh_token") {
+      const limit = checkRateLimit(`auth-refresh-ip:${getClientIdentifier(req)}`, REFRESH_IP_LIMIT);
+      if (!limit.success) return gotrueError("Too many requests. Please wait a minute and try again.", 429, "over_request_rate_limit");
       const refresh = String(body.refresh_token || "");
       const { session, error } = await refreshSession(refresh);
       if (error || !session) {
@@ -173,21 +194,24 @@ export async function POST(
   }
 
   if (slug === "signup") {
+    const email = String(body.email || "").trim().toLowerCase();
     const ip = checkRateLimit(`auth-signup-ip:${getClientIdentifier(req)}`, SIGNUP_IP_LIMIT);
-    if (!ip.success) return gotrueError("Too many requests. Please try again later.", 429, "over_request_rate_limit");
-    const email = String(body.email || "");
-    const { session, error } = await signUpWithPassword({
+    const addr = email ? checkRateLimit(`auth-signup-email:${email}`, SIGNUP_EMAIL_LIMIT) : { success: true };
+    if (!ip.success || !addr.success) {
+      return gotrueError("Too many requests. Please try again later.", 429, "over_request_rate_limit");
+    }
+    const { user, error } = await signUpWithPassword({
       email,
       password: String(body.password || ""),
       data: body.data || body.user_metadata || {},
     });
-    if (error || !session) {
+    if (error || !user) {
       return failure(error ?? { message: "Signup failed", code: "validation_failed", status: 400 });
     }
-    // Confirmation off: GoTrue answers with a full session, which supabase-js
-    // stores, so the visitor is signed in straight away.
-    clearLoginFailures(session.user.email);
-    return sessionResponse(session);
+    // Same answer whether or not the address already had an account: a
+    // user object and no session (GoTrue with "Confirm email" on). The page
+    // signs in next with the same email and password.
+    return NextResponse.json(user, { status: 200, headers: cors() });
   }
 
   // No mail provider is configured for this store, so confirmation and
@@ -236,18 +260,60 @@ export async function PUT(
   const body = (await req.json().catch(() => ({}))) as Record<string, any>;
   let user = current;
 
-  if (body.password !== undefined) {
-    // Supabase with "Secure password change" off: any valid session may set
-    // a new password, and that session stays signed in.
-    const res = await updateUserPassword(current.id, String(body.password));
-    if (res.error || !res.user) return failure(res.error ?? { message: "Update failed", code: "unexpected_failure", status: 500 });
-    user = res.user;
-  }
-
+  // Metadata first, so a refused password change does not drop it.
   if (body.data || body.user_metadata) {
     const res = await updateUserMetadata(current.id, body.data || body.user_metadata);
     if (res.error || !res.user) return failure(res.error ?? { message: "Update failed", code: "unexpected_failure", status: 500 });
     user = res.user;
+  }
+
+  if (body.password !== undefined) {
+    // Proof that it is really the account holder: the current password in
+    // `current_password`, or a sign-in in the last 15 minutes (or a session
+    // from a reset link). A borrowed or stolen session cannot take over the
+    // account by setting a new password.
+    const currentPassword = typeof body.current_password === "string" ? body.current_password : "";
+    if (currentPassword) {
+      const limit = checkRateLimit(`auth-current-password:${current.id}`, CURRENT_PASSWORD_LIMIT);
+      if (!limit.success) {
+        return gotrueError("Too many attempts. Please wait 15 minutes and try again.", 429, "over_request_rate_limit");
+      }
+      if (!(await verifyCurrentPassword(current.id, currentPassword))) {
+        return gotrueError("Your current password is not correct.", 400, "current_password_mismatch");
+      }
+    } else {
+      const verified = await verifyAccessToken(token);
+      if (!verified || !canChangePasswordWith(verified.payload)) {
+        return gotrueError(
+          "Please enter your current password to set a new one.",
+          400,
+          "reauthentication_needed"
+        );
+      }
+    }
+    // Ends every session of the account (other devices included) and
+    // returns a fresh one for this caller.
+    const res = await updateUserPassword(current.id, String(body.password));
+    if (res.error || !res.user || !res.session) {
+      return failure(res.error ?? { message: "Update failed", code: "unexpected_failure", status: 500 });
+    }
+    clearLoginFailures(res.user.email);
+    // supabase-js reads the user from this body (`data.user`); the new
+    // session rides along as `session` so the page can store it with
+    // supabase.auth.setSession(). The old tokens no longer work.
+    return NextResponse.json(
+      {
+        ...res.user,
+        session: {
+          access_token: res.session.access_token,
+          refresh_token: res.session.refresh_token,
+          expires_in: res.session.expires_in,
+          expires_at: res.session.expires_at,
+          token_type: res.session.token_type,
+        },
+      },
+      { headers: cors() }
+    );
   }
 
   return NextResponse.json(user, { headers: cors() });

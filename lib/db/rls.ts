@@ -7,10 +7,17 @@
 import { timingSafeEqual } from "crypto";
 import { jwtVerify } from "jose";
 import { getSharedPool, runWithClient } from "./pool";
-import { authJwtSecret } from "./mode";
+import { authJwtSecret, sessionClaimsValid } from "./mode";
+import { clientIpFromHeaders, ipInRanges, normalizeIp } from "@/lib/rate-limit";
 
 export type RlsActor =
-  | { kind: "service" }
+  /**
+   * The service role. `via: "http"` is the GSG AI agent presenting the
+   * service key to /rest/v1 or /storage/v1 (scoped to the tables and
+   * functions in lib/db/rest-policy.ts); without `via` it is server code
+   * running in-process (unrestricted).
+   */
+  | { kind: "service"; via?: "http" }
   | { kind: "anon"; claims: Record<string, unknown> }
   | {
       kind: "authenticated";
@@ -46,6 +53,11 @@ export function isStaffActor(actor: RlsActor): boolean {
 /** The service role (in-process, or the service key over HTTP when allowed). */
 export function isServiceActor(actor: RlsActor): boolean {
   return actor.kind === "service";
+}
+
+/** The service key presented over HTTP (the GSG AI agent): scoped access only. */
+export function isHttpServiceActor(actor: RlsActor): boolean {
+  return actor.kind === "service" && actor.via === "http";
 }
 
 /** Staff or the service role: no cost-column hiding, raw errors, unfiltered writes allowed. */
@@ -122,6 +134,32 @@ function serviceKeyHttpAllowed(): boolean {
 }
 
 /**
+ * Optional IP allow-list for the service key over HTTP:
+ * SERVICE_KEY_ALLOWED_IPS="1.2.3.4, 2001:db8::/32" (addresses or CIDR
+ * ranges). Unset or empty: no IP restriction. The caller's IP is worked out
+ * exactly as the rate limiter does (Cloudflare-aware, lib/rate-limit.ts).
+ */
+function serviceKeyIpAllowed(headers: Headers): boolean {
+  const raw = (process.env.SERVICE_KEY_ALLOWED_IPS || "").trim();
+  if (!raw) return true;
+  const ranges = raw
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean)
+    .map((r) => {
+      if (r.includes("/")) return r;
+      const ip = normalizeIp(r);
+      if (!ip) return "";
+      return ip.includes(":") ? `${ip}/128` : `${ip}/32`;
+    })
+    .filter(Boolean);
+  const ip = clientIpFromHeaders(headers);
+  if (!ip) return false;
+  return ipInRanges(ip, ranges);
+}
+
+
+/**
  * Work out who is calling a browser-facing route (/rest/v1, /storage/v1)
  * from the Authorization / apikey headers.
  *
@@ -141,8 +179,12 @@ export async function resolveActor(headers: Headers): Promise<RlsActor> {
   if (anonKey && safeEqual(token, anonKey)) return ANON;
 
   if (isServiceKey(token)) {
-    if (serviceKeyHttpAllowed()) return { kind: "service" };
-    throw new RlsAuthError("JWT is invalid or expired");
+    if (!serviceKeyHttpAllowed()) throw new RlsAuthError("JWT is invalid or expired");
+    if (!serviceKeyIpAllowed(headers)) {
+      console.warn(`[rls] service key refused from ${clientIpFromHeaders(headers) || "unknown"} (not in SERVICE_KEY_ALLOWED_IPS)`);
+      throw new RlsAuthError("JWT is invalid or expired");
+    }
+    return { kind: "service", via: "http" };
   }
 
   let payload: Record<string, unknown>;
@@ -159,11 +201,10 @@ export async function resolveActor(headers: Headers): Promise<RlsActor> {
   // An anon token grants nothing beyond anonymous access, whatever its claims.
   if (payload.role === "anon") return { kind: "anon", claims: { role: "anon" } };
 
-  const userId = typeof payload.sub === "string" ? payload.sub : "";
-  if (!userId) throw new RlsAuthError("JWT has no subject");
-  // Session tokens always carry an expiry; one without exp would never die.
-  if (typeof payload.exp !== "number") throw new RlsAuthError("JWT is invalid or expired");
-  if (payload.role !== "authenticated") throw new RlsAuthError("JWT is invalid or expired");
+  // Session tokens always carry an expiry (one without exp would never
+  // die), the authenticated role, a subject and this app's audience.
+  if (!sessionClaimsValid(payload)) throw new RlsAuthError("JWT is invalid or expired");
+  const userId = payload.sub as string;
 
   // Banned, deleted or signed-out-everywhere accounts are treated as
   // anonymous, so a ban or password change cuts data access at once instead
