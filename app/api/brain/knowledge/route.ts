@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
 import { getDeliverySettings, SHOPPER_MARKUP_MAX_PCT } from '@/lib/delivery-settings';
 import { STORE_FAQS, SHOPPER_FAQS } from '@/lib/faq-content';
 
@@ -15,8 +15,6 @@ import { STORE_FAQS, SHOPPER_FAQS } from '@/lib/faq-content';
 
 export const dynamic = 'force-dynamic';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 type CatalogRow = {
   price: number;
@@ -26,7 +24,7 @@ type CatalogRow = {
 };
 
 export async function GET() {
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  const supabase = createServerSupabase('anon');
   const [settings, catalog] = await Promise.all([
     getDeliverySettings(),
     supabase

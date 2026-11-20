@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { absoluteMediaUrl } from '@/lib/media-url';
 
 export function verifyBrainBearer(request: Request): NextResponse | null {
   const expected = process.env.BRAIN_API_KEY;
@@ -48,7 +49,7 @@ export function toSafeProduct(product: any): SafeProduct {
     price: Number(product.price ?? 0),
     category,
     in_stock: Number(product.quantity ?? 0) > 0,
-    image_url: firstImage?.url ?? null,
+    image_url: absoluteMediaUrl(firstImage?.url ?? null),
   };
 }
 

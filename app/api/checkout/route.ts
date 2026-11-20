@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { createClient } from '@supabase/supabase-js';
+import { verifyAuth } from '@/lib/auth';
 import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '@/lib/rate-limit';
 import {
   calculateDeliveryFee,
@@ -82,15 +82,11 @@ async function resolveAuthUserId(req: Request): Promise<string | null> {
     if (!token) return null;
 
     try {
-        const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-        const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-        const userScoped = createClient(url, anon, {
-            auth: { autoRefreshToken: false, persistSession: false },
-            global: { headers: { Authorization: `Bearer ${token}` } },
-        });
-        const { data, error } = await userScoped.auth.getUser(token);
-        if (error || !data.user) return null;
-        return data.user.id;
+        // Same check GoTrue's /user made: a valid, unexpired session of a live
+        // (not banned, not deleted, not signed-out-everywhere) account.
+        const auth = await verifyAuth(req);
+        if (!auth.authenticated || !auth.user?.id) return null;
+        return String(auth.user.id);
     } catch {
         return null;
     }

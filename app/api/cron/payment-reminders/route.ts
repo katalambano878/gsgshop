@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
 import { sendPaymentLink } from '@/lib/notifications';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+export const dynamic = 'force-dynamic';
 
 // This endpoint is called by a cron job to send payment reminders
 // for orders that haven't been paid within 15 minutes
@@ -17,7 +16,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = createServerSupabase('service');
 
     // Find orders that:
     // 1. Are not paid

@@ -1,10 +1,8 @@
 import type { Metadata } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
 import ShopClient from './ShopClient';
 import { createPageMetadata } from '@/lib/seo';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 type Props = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -31,7 +29,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
   }
 
   if (categorySlug && categorySlug !== 'all') {
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabase = createServerSupabase('anon');
     const { data: category } = await supabase
       .from('categories')
       .select('name, description')

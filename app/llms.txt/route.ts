@@ -1,11 +1,13 @@
 import { getGoodsBaseUrl, getShopperBaseUrl } from '@/lib/site-urls';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
 import { getDeliverySettings } from '@/lib/delivery-settings';
 
 // Serves /llms.txt — an emerging standard that gives AI assistants
 // (ChatGPT, Claude, Perplexity, etc.) a concise, authoritative map of the
 // site so the brand is summarised and cited accurately in AI answers.
-export const revalidate = 86400;
+// Rendered per request (the build has no database); browsers and proxies
+// may cache it for a day.
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const goods = getGoodsBaseUrl();
@@ -14,10 +16,7 @@ export async function GET() {
 
   // List what the store actually sells right now, so AI answers can cite
   // real Convenience Goods products, not only the Personal Shopper pages.
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  const supabase = createServerSupabase('anon');
   const { data: products } = await supabase
     .from('products')
     .select('name, slug, price, quantity, categories(name)')
@@ -25,7 +24,7 @@ export async function GET() {
     .gt('price', 0)
     .order('name');
   const productLines = (products || [])
-    .map((p) => {
+    .map((p: any) => {
       const cat = (Array.isArray(p.categories) ? p.categories[0] : p.categories) as { name: string } | null;
       const stock = p.quantity > 0 ? 'in stock' : 'out of stock';
       return `- ${p.name.trim()}: GH₵${Number(p.price).toFixed(2)}, ${stock}${cat?.name ? `, ${cat.name.trim()}` : ''} (${goods}/product/${p.slug})`;

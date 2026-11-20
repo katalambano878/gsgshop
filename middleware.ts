@@ -1,9 +1,92 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { jwtVerify, errors as joseErrors } from 'jose';
+import { authJwtSecret } from '@/lib/db/mode';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// ============================================================
+// Admin session check (edge-safe)
+// ============================================================
+// The middleware runs on the edge and cannot reach the database: it checks
+// the session token's signature itself, then asks the app (same container,
+// over loopback) for the live role, so a demoted, banned or signed-out
+// staff member loses the dashboard at once. The browser mirrors its session
+// into the `sb-access-token` cookie (app/admin/login and lib/supabase.ts).
+
+const SESSION_COOKIE = 'sb-access-token';
+
+/** The container serves on 0.0.0.0:3000; override with INTERNAL_APP_ORIGIN. */
+function internalOrigin(request: NextRequest): string {
+    if (process.env.INTERNAL_APP_ORIGIN) return process.env.INTERNAL_APP_ORIGIN.replace(/\/+$/, '');
+    if (process.env.NODE_ENV !== 'production') return request.nextUrl.origin;
+    return 'http://127.0.0.1:3000';
+}
+
+const ROLE_CACHE_TTL_MS = 30 * 1000;
+const roleCache = new Map<string, { userId: string; role: string; fetchedAt: number }>();
+
+type TokenCheck =
+    | { status: 'ok'; userId: string; role: string }
+    /** No usable session: expired. */
+    | { status: 'expired' }
+    /** Bad signature, wrong kind of token, revoked, or no profile. */
+    | { status: 'invalid' }
+    /** Signature is valid but the role lookup could not run (app unreachable). */
+    | { status: 'unverified'; userId: string };
+
+/** The same signing secret lib/db/auth.ts uses (AUTH_JWT_SECRET, JWT_SECRET or SUPABASE_JWT_SECRET). */
+function jwtSecret(): string | null {
+    try {
+        return authJwtSecret();
+    } catch {
+        return null;
+    }
+}
+
+async function checkToken(request: NextRequest, token: string): Promise<TokenCheck> {
+    const secret = jwtSecret();
+    if (!secret) return { status: 'invalid' };
+    let userId: string;
+    try {
+        const { payload } = await jwtVerify(token, new TextEncoder().encode(secret), { algorithms: ['HS256'] });
+        if (payload.typ === 'refresh' || payload.role !== 'authenticated' || typeof payload.sub !== 'string') {
+            return { status: 'invalid' };
+        }
+        if (typeof payload.exp !== 'number') return { status: 'invalid' };
+        userId = payload.sub;
+    } catch (e) {
+        return { status: e instanceof joseErrors.JWTExpired ? 'expired' : 'invalid' };
+    }
+
+    const now = Date.now();
+    const cached = roleCache.get(token);
+    if (cached && now - cached.fetchedAt < ROLE_CACHE_TTL_MS) {
+        return { status: 'ok', userId: cached.userId, role: cached.role };
+    }
+    try {
+        const res = await fetch(`${internalOrigin(request)}/api/auth/session-role`, {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+        });
+        if (res.status === 401) return { status: 'invalid' };
+        if (!res.ok) return { status: 'unverified', userId };
+        const body = (await res.json()) as { userId?: string; role?: string };
+        if (!body.userId || !body.role) return { status: 'invalid' };
+        if (roleCache.size > 500) roleCache.clear();
+        roleCache.set(token, { userId: body.userId, role: body.role, fetchedAt: now });
+        return { status: 'ok', userId: body.userId, role: body.role };
+    } catch {
+        return { status: 'unverified', userId };
+    }
+}
+
+/** This app's own Supabase-compatible API: never host-rewritten. */
+function isDataApiPath(pathname: string): boolean {
+    return (
+        pathname === '/rest/v1' || pathname.startsWith('/rest/v1/') ||
+        pathname === '/auth/v1' || pathname.startsWith('/auth/v1/') ||
+        pathname === '/storage/v1' || pathname.startsWith('/storage/v1/')
+    );
+}
 
 export async function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
@@ -34,7 +117,9 @@ export async function middleware(request: NextRequest) {
     //
     // Localhost / Vercel preview hosts hit none of these and continue to work
     // through path-based access at /shopper/*.
-    const isApiRoute = pathname.startsWith('/api/');
+    // /rest/v1, /auth/v1 and /storage/v1 are API routes too: the browser's
+    // supabase-js calls them on whichever host served the page.
+    const isApiRoute = pathname.startsWith('/api/') || isDataApiPath(pathname);
     const isAdminRoute = pathname.startsWith('/admin');
     const isStaticFile = pathname.startsWith('/_next') || pathname.includes('.');
 
@@ -99,40 +184,9 @@ export async function middleware(request: NextRequest) {
             return response;
         }
 
-        // Server-side auth check: verify the Supabase session cookie/token
-        // We set 'sb-access-token' explicitly on login, but also check other formats
-        let token: string | undefined;
-
-        // 1. Check our explicitly set cookie (most reliable)
-        token = request.cookies.get('sb-access-token')?.value;
-
-        // 2. Check Supabase's own cookie format
-        if (!token) {
-            const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0];
-            token = request.cookies.get(`sb-${projectRef}-auth-token`)?.value;
-        }
-
-        // 3. Try to find any Supabase auth cookie (newer formats may encode as JSON)
-        if (!token) {
-            for (const [name, cookie] of request.cookies) {
-                if (name.startsWith('sb-') && (name.endsWith('-auth-token') || name.includes('auth'))) {
-                    try {
-                        const parsed = JSON.parse(cookie.value);
-                        if (Array.isArray(parsed) && parsed[0]) {
-                            token = parsed[0];
-                        } else if (typeof parsed === 'object' && parsed.access_token) {
-                            token = parsed.access_token;
-                        } else if (typeof parsed === 'string') {
-                            token = parsed;
-                        }
-                    } catch {
-                        // Not JSON, use raw value
-                        token = cookie.value;
-                    }
-                    if (token) break;
-                }
-            }
-        }
+        // Server-side auth check: the session token the browser mirrors into
+        // the sb-access-token cookie (see lib/supabase.ts).
+        const token = request.cookies.get(SESSION_COOKIE)?.value;
 
         if (!token) {
             // No auth token found — redirect to login
@@ -142,43 +196,29 @@ export async function middleware(request: NextRequest) {
         }
 
         // Verify the token is valid and user has admin/staff role
-        if (supabaseServiceKey) {
-            try {
-                const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-                    auth: { autoRefreshToken: false, persistSession: false }
-                });
-
-                const { data: { user }, error } = await supabase.auth.getUser(token);
-
-                if (error || !user) {
-                    const loginUrl = new URL('/admin/login', request.url);
-                    loginUrl.searchParams.set('redirect', pathname);
-                    loginUrl.searchParams.set('error', 'session_expired');
-                    return NextResponse.redirect(loginUrl);
-                }
-
-                // Check role
-                const { data: profile } = await supabase
-                    .from('profiles')
-                    .select('role')
-                    .eq('id', user.id)
-                    .single();
-
-                if (!profile || (profile.role !== 'admin' && profile.role !== 'staff')) {
-                    const loginUrl = new URL('/admin/login', request.url);
-                    loginUrl.searchParams.set('error', 'unauthorized');
-                    return NextResponse.redirect(loginUrl);
-                }
-
-                // Auth passed — set user info in headers for downstream use
-                response.headers.set('x-user-id', user.id);
-                response.headers.set('x-user-role', profile.role);
-
-            } catch (err) {
-                console.error('[Middleware] Auth check error:', err);
-                // On error, still allow through (client-side check is backup)
-                // But log it for monitoring
+        const check = await checkToken(request, token);
+        if (check.status === 'expired' || check.status === 'invalid') {
+            const loginUrl = new URL('/admin/login', request.url);
+            loginUrl.searchParams.set('redirect', pathname);
+            loginUrl.searchParams.set('error', 'session_expired');
+            return NextResponse.redirect(loginUrl);
+        }
+        if (check.status === 'unverified') {
+            // The role lookup could not run (app restarting, loopback blocked).
+            // As before, a lookup error lets a signed session through: the
+            // admin layout still checks the role, and row-level security
+            // still guards every read and write. Logged for monitoring.
+            console.error('[Middleware] Auth check error: role lookup unavailable');
+        } else {
+            if (check.role !== 'admin' && check.role !== 'staff') {
+                const loginUrl = new URL('/admin/login', request.url);
+                loginUrl.searchParams.set('error', 'unauthorized');
+                return NextResponse.redirect(loginUrl);
             }
+
+            // Auth passed — set user info in headers for downstream use
+            response.headers.set('x-user-id', check.userId);
+            response.headers.set('x-user-role', check.role);
         }
     }
 

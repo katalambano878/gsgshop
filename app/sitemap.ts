@@ -1,10 +1,12 @@
 import { MetadataRoute } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
+import { absoluteMediaUrl } from '@/lib/media-url';
 import { getShopperBaseUrl } from '@/lib/site-urls';
 import { absoluteUrl, STORE_STATIC_ROUTES } from '@/lib/seo';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Built per request from the live catalogue (never at build time: the
+// build has no database).
+export const dynamic = 'force-dynamic';
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const shopperUrl = getShopperBaseUrl();
@@ -40,7 +42,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   let categoryPages: MetadataRoute.Sitemap = [];
 
   try {
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabase = createServerSupabase('anon');
 
     const { data: products } = await supabase
       .from('products')
@@ -48,11 +50,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       .eq('status', 'active');
 
     if (products) {
-      productPages = products.map((product) => {
+      productPages = products.map((product: any) => {
         const images = (product.product_images || [])
           .sort((a: { position: number }, b: { position: number }) => a.position - b.position)
           .map((img: { url: string }) => img.url)
-          .filter(Boolean);
+          .filter(Boolean)
+          .map((url: string) => absoluteMediaUrl(url));
 
         return {
           url: absoluteUrl(`/product/${product.slug}`),
@@ -70,7 +73,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       .eq('status', 'active');
 
     if (categories) {
-      categoryPages = categories.map((category) => ({
+      categoryPages = categories.map((category: any) => ({
         url: absoluteUrl(`/shop?category=${category.slug}`),
         lastModified: category.updated_at ? new Date(category.updated_at) : now,
         changeFrequency: 'weekly' as const,

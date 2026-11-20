@@ -1,4 +1,5 @@
 import { absoluteUrl, productSeoDescription, SITE_NAME } from '@/lib/seo';
+import { absoluteMediaUrl } from '@/lib/media-url';
 
 /**
  * One product → one Meta catalogue item. Shared by the public CSV feed
@@ -62,10 +63,11 @@ export function toMetaItem(p: MetaSourceProduct): MetaItem | null {
     const stock = variants.length
         ? variants.reduce((sum, v) => sum + (v.quantity || 0), 0)
         : p.quantity;
-    // Direct Supabase storage URLs only — never a /_next/image wrapper.
+    // Direct storage URLs only — never a /_next/image wrapper. Stored URLs are
+    // host-relative; Meta needs them absolute on the storefront's domain.
     const image = [...(p.product_images || [])]
         .sort((a, b) => a.position - b.position)
-        .map((img) => img.url)
+        .map((img) => absoluteMediaUrl(img.url))
         .find((url) => /^https?:\/\//.test(url || '') && !url.includes('/_next/image'));
     if (!p.slug || !(price > 0) || !image) return null;
     const category = Array.isArray(p.categories) ? p.categories[0]?.name : p.categories?.name;

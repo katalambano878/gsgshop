@@ -35,3 +35,6 @@ build_errors.log
 
 # Vercel
 .vercel
+
+# Local uploads (STORAGE_ROOT default in development)
+.storage/

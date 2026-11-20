@@ -6,6 +6,8 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { withTransaction } from '@/lib/db/pool';
+import { becamePaid, lockOrderPaymentStatus, notifyWaPaymentConfirmed } from '@/lib/wa-payment-webhook';
 import { sendOrderConfirmation, sendShopperOrderConfirmation } from '@/lib/notifications';
 import type { PaymentTarget } from '@/lib/payment-target';
 
@@ -27,14 +29,23 @@ export async function finalizePayment(opts: FinalizeOpts): Promise<FinalizeResul
     const { target, provider, transactionId } = opts;
 
     if (target.kind === 'order') {
-        const { data: orderJson, error: updateError } = await supabaseAdmin.rpc('mark_order_paid', {
-            order_ref: target.ref,
-            moolre_ref: transactionId || `${provider}-verify`,
+        // The order row is locked while it is marked paid, so two confirmations
+        // arriving together (callback + verify) agree on which one made it paid.
+        const { data: orderJson, error: updateError, before } = await withTransaction(async () => {
+            const before = await lockOrderPaymentStatus(target.ref);
+            const res = await supabaseAdmin.rpc('mark_order_paid', {
+                order_ref: target.ref,
+                moolre_ref: transactionId || `${provider}-verify`,
+            });
+            return { ...res, before };
         });
         if (updateError) {
             console.error('[finalizePayment] mark_order_paid RPC error:', updateError.message);
             return { ok: false, row: null, error: updateError.message };
         }
+
+        // WhatsApp-agent orders: "payment confirmed" webhook (was a DB trigger).
+        if (becamePaid(before, orderJson)) notifyWaPaymentConfirmed(orderJson);
 
         try {
             await supabaseAdmin

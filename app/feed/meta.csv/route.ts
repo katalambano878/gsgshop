@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
 import { META_COLUMNS, META_PRODUCT_SELECT, toMetaItem, type MetaSourceProduct } from '@/lib/meta-catalog';
 
 // Meta (Facebook / Instagram / WhatsApp) catalogue feed.
@@ -9,8 +9,6 @@ import { META_COLUMNS, META_PRODUCT_SELECT, toMetaItem, type MetaSourceProduct }
 
 export const dynamic = 'force-dynamic';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 function csvCell(value: string): string {
   const clean = value.replace(/\r?\n|\r/g, ' ').trim();
@@ -18,7 +16,7 @@ function csvCell(value: string): string {
 }
 
 export async function GET() {
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  const supabase = createServerSupabase('anon');
   const { data, error } = await supabase
     .from('products')
     .select(META_PRODUCT_SELECT)

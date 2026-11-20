@@ -1,5 +1,6 @@
 import { Metadata } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
+import { absoluteMediaUrl } from '@/lib/media-url';
 import ProductDetailClient from './ProductDetailClient';
 import {
   absoluteUrl,
@@ -9,9 +10,7 @@ import {
   productSeoDescription,
 } from '@/lib/seo';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createServerSupabase('anon');
 
 type Props = {
   params: Promise<{ slug: string }>;
@@ -94,7 +93,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       'buy online Ghana',
       'GSG shop',
     ].filter(Boolean),
-    ogImage: mainImage || '/og-image.png',
+    ogImage: mainImage ? absoluteMediaUrl(mainImage) : '/og-image.png',
   });
 }
 
@@ -131,7 +130,7 @@ export default async function ProductDetailPage({ params }: Props) {
   const productSchema = generateProductSchema({
     name: product.name,
     description,
-    image: images.length ? images : absoluteUrl('/og-image.png'),
+    image: images.length ? images.map((url) => absoluteMediaUrl(url)) : absoluteUrl('/og-image.png'),
     price: hasVariants ? minVariantPrice : product.price,
     currency: 'GHS',
     sku: product.sku || product.id,

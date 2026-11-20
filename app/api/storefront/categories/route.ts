@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// In-process anon client (visitor RLS applies)
+const supabase = createServerSupabase('anon');
+
+// Served per request (the build has no database); the in-memory cache below
+// still answers most requests.
+export const dynamic = 'force-dynamic';
 
 // Simple in-memory cache
 let cache: { data: any; timestamp: number } | null = null;

@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase-server';
+import { absoluteMediaUrl } from '@/lib/media-url';
 import { absoluteUrl, productSeoDescription, SITE_NAME, DEFAULT_DESCRIPTION } from '@/lib/seo';
 
 // Google Merchant Center product feed (RSS 2.0 + g: namespace).
@@ -6,10 +7,9 @@ import { absoluteUrl, productSeoDescription, SITE_NAME, DEFAULT_DESCRIPTION } fr
 // fetch in Merchant Center so products show in Google Shopping / free listings.
 // Only products Google accepts are listed: a real price and at least one photo.
 
-export const revalidate = 3600;
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Rendered per request (the build has no database); the response keeps
+// its s-maxage=3600 header for caches in front of the app.
+export const dynamic = 'force-dynamic';
 
 function xml(value: string): string {
   return value
@@ -38,7 +38,7 @@ type FeedProduct = {
 };
 
 export async function GET() {
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  const supabase = createServerSupabase('anon');
   const { data, error } = await supabase
     .from('products')
     .select(
@@ -63,7 +63,8 @@ export async function GET() {
       const images = [...(p.product_images || [])]
         .sort((a, b) => a.position - b.position)
         .map((img) => img.url)
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((url) => absoluteMediaUrl(url));
       const category = Array.isArray(p.categories) ? p.categories[0]?.name : p.categories?.name;
       return { p, price, stock, images, category };
     })

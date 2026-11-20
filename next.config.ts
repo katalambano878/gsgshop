@@ -1,13 +1,32 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Coolify Dockerfile build: only Next's standalone server goes in the image.
+  output: 'standalone',
   images: {
     minimumCacheTTL: 2592000, // Cache optimized images for 30 days
+    // Uploaded photos are stored host-relative (/storage/v1/object/public/...)
+    // and served by this app on every host; '/**' keeps the files in public/.
+    localPatterns: [
+      { pathname: '/storage/v1/**' },
+      { pathname: '/**' },
+    ],
     remotePatterns: [
       {
         protocol: 'https',
         hostname: '*.supabase.co',
         pathname: '/storage/v1/object/public/**',
+      },
+      // Absolute URLs to this app's own storage (e.g. written by the WhatsApp agent).
+      {
+        protocol: 'https',
+        hostname: 'goods.gsgbrands.com.gh',
+        pathname: '/storage/v1/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'shopper.gsgbrands.com.gh',
+        pathname: '/storage/v1/**',
       },
       {
         protocol: 'https',
