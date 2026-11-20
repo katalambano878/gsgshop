@@ -70,17 +70,23 @@ export default function AnalyticsPage() {
           .order('created_at')
       );
 
-      // Items of those same orders, filtered through the orders embed (no list of ids in the URL).
-      // Left join on products: items of a deleted product still count, under their saved name.
-      const validItems = await fetchAllRows<any>(() =>
-        supabase
-          .from('order_items')
-          .select('id, quantity, unit_price, total_price, product_id, product_name, products(name, categories(name)), orders!inner(created_at, payment_status, status)')
-          .gte('orders.created_at', isoStart)
-          .eq('orders.payment_status', 'paid')
-          .not('orders.status', 'in', '(cancelled,refunded)')
-          .order('id')
-      );
+      // Items of those same orders, read in chunks of order ids (the data layer
+      // cannot filter through a related table, and a long id list would not
+      // fit in one address). Left join on products: items of a deleted product
+      // still count, under their saved name.
+      const validItems: any[] = [];
+      const orderIds = orders.map((o) => o.id);
+      for (let i = 0; i < orderIds.length; i += 100) {
+        const chunk = orderIds.slice(i, i + 100);
+        const part = await fetchAllRows<any>(() =>
+          supabase
+            .from('order_items')
+            .select('id, order_id, quantity, unit_price, total_price, product_id, product_name, products(name, categories(name))')
+            .in('order_id', chunk)
+            .order('id')
+        );
+        validItems.push(...part);
+      }
 
       // Process Metrics
       const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);

@@ -151,7 +151,7 @@ export async function POST(request: Request) {
     // ---- validate product fields (only the ones sent, except on create) ----
     const fields: Record<string, unknown> = {};
     if (isCreate || has(p, 'name')) fields.name = text(p.name, 200, 'name', true);
-    if (isCreate || has(p, 'price')) fields.price = money(p.price, 'price', { required: true, positive: true });
+    if (isCreate || has(p, 'price')) fields.price = money(p.price, 'price', { required: true });
     if (has(p, 'compare_at_price')) fields.compare_at_price = money(p.compare_at_price, 'compare_at_price');
     if (has(p, 'description')) fields.description = text(p.description, 20_000, 'description');
     if (has(p, 'sku')) fields.sku = text(p.sku, 100, 'sku');
@@ -238,7 +238,7 @@ export async function POST(request: Request) {
           }
           sent.sku = sku;
         }
-        if (has(v, 'price') && v.price !== null && v.price !== '') sent.price = money(v.price, 'variants', { positive: true });
+        if (has(v, 'price') && v.price !== null && v.price !== '') sent.price = money(v.price, 'variants');
         const quantity = has(v, 'quantity') && v.quantity !== null && v.quantity !== undefined ? stock(v.quantity, 'variants') : null;
         return { id: vid, sent, quantity, meta: patchParts(v.metadataPatch, 'variants'), label: String(sent.name || '') };
       });
@@ -409,6 +409,20 @@ export async function POST(request: Request) {
       );
 
       const { rows: out } = await query<{ slug: string }>(`SELECT slug FROM products WHERE id = $1`, [productId]);
+      // A product on sale must have a price: its own, or one on every variant.
+      // Drafts and archived products may be saved without one.
+      const { rows: priced } = await query<{ status: string; price: number; n: number; priced: number }>(
+        `SELECT p.status::text AS status, COALESCE(p.price, 0) AS price,
+                (SELECT count(*)::int FROM product_variants v WHERE v.product_id = p.id) AS n,
+                (SELECT count(*)::int FROM product_variants v WHERE v.product_id = p.id AND COALESCE(v.price, 0) > 0) AS priced
+           FROM products p WHERE p.id = $1`,
+        [productId],
+      );
+      const pr = priced[0];
+      if (pr && pr.status === 'active' && !(Number(pr.price) > 0) && (Number(pr.n) === 0 || Number(pr.priced) < Number(pr.n))) {
+        bad('An active product needs a price above GH₵0, or a price on every variant. Set a price, or save it as Draft.', 'price');
+      }
+
       return { id: productId as string, slug: out[0]?.slug, keptVariants };
     });
 

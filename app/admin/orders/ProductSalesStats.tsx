@@ -50,40 +50,39 @@ export default function ProductSalesStats({ isOpen, onClose }: { isOpen: boolean
         // 'all' leaves startDate as null
 
         try {
-            // We fetch order_items and filter by the parent order's created_at.
-            // Paged: one select is capped at 1000 rows, so "All time" must read every page.
-            const buildQuery = () => {
-                let query = supabase
-                    .from('order_items')
-                    .select(`
-          quantity,
-          product_name,
-          product_id,
-          variant_name,
-          total_price,
-          orders!inner (
-            id,
-            created_at,
-            status,
-            payment_status
-          )
-        `)
-                    // Real sales only: paid, and not cancelled or refunded
-                    .eq('orders.payment_status', 'paid')
-                    .not('orders.status', 'in', '(cancelled,refunded)');
-                if (startDate) {
-                    query = query.gte('orders.created_at', startDate);
-                }
-                return query.order('id', { ascending: true });
-            };
-
+            // Real sales only: paid, and not cancelled or refunded. The data
+            // layer cannot filter through a related table, so the qualifying
+            // orders are read first (paged: one select is capped at 1000 rows)
+            // and their lines are then read in chunks of order ids.
             const PAGE = 1000;
-            const data: any[] = [];
+            const orderIds: string[] = [];
             for (let from = 0; ; from += PAGE) {
-                const { data: page, error } = await buildQuery().range(from, from + PAGE - 1);
+                let q = supabase
+                    .from('orders')
+                    .select('id')
+                    .eq('payment_status', 'paid')
+                    .not('status', 'in', '(cancelled,refunded)');
+                if (startDate) q = q.gte('created_at', startDate);
+                const { data: page, error } = await q.order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, from + PAGE - 1);
                 if (error) throw error;
-                data.push(...(page || []));
+                orderIds.push(...(page || []).map((o: any) => o.id));
                 if (!page || page.length < PAGE) break;
+            }
+
+            const data: any[] = [];
+            for (let i = 0; i < orderIds.length; i += 100) {
+                const chunk = orderIds.slice(i, i + 100);
+                for (let from = 0; ; from += PAGE) {
+                    const { data: page, error } = await supabase
+                        .from('order_items')
+                        .select('order_id, quantity, product_name, product_id, variant_name, total_price')
+                        .in('order_id', chunk)
+                        .order('id', { ascending: true })
+                        .range(from, from + PAGE - 1);
+                    if (error) throw error;
+                    data.push(...(page || []).map((it: any) => ({ ...it, orders: { id: it.order_id } })));
+                    if (!page || page.length < PAGE) break;
+                }
             }
 
             if (data) {

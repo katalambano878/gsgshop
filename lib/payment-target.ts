@@ -236,10 +236,12 @@ export async function recordPaymentAttempt(
         [`${provider}_last_ref`]: uniqueRef,
     };
     const entry = { provider, ref: uniqueRef, at: new Date().toISOString() };
+    // Every placeholder must be used in both shapes (Postgres cannot type an
+    // unused parameter), so the orders shape casts $4 without storing it.
     const extraCols =
         target.kind === 'order'
-            ? `payment_method = $3, payment_provider = $3`
-            : `payment_method = $3, payment_provider = $3, last_payment_ref = $4, last_payment_attempt_at = now()`;
+            ? `payment_method = $3::text, payment_provider = CASE WHEN $4::text IS NULL THEN payment_provider ELSE $3::text END`
+            : `payment_method = $3::text, payment_provider = $3::text, last_payment_ref = $4::text, last_payment_attempt_at = now()`;
     await query(
         `UPDATE public.${table}
             SET ${extraCols},

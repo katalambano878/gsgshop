@@ -46,8 +46,19 @@ export function getPool(): Pool {
   return getSharedPool();
 }
 
+// Next.js bundles this module separately for different routes, so a
+// module-level variable alone gave each bundle its own pool and the app could
+// open several times PG_POOL_MAX connections. One pool per process, kept on
+// globalThis.
+const GLOBAL_POOL_KEY = "__gsg_shared_pg_pool__";
+
 export function getSharedPool(): Pool {
   if (_pool) return _pool;
+  const shared = (globalThis as any)[GLOBAL_POOL_KEY] as Pool | undefined;
+  if (shared) {
+    _pool = shared;
+    return shared;
+  }
   const connectionString =
     process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
@@ -93,6 +104,7 @@ export function getSharedPool(): Pool {
       /* non-fatal on older Postgres */
     });
   });
+  (globalThis as any)[GLOBAL_POOL_KEY] = _pool;
   return _pool;
 }
 
