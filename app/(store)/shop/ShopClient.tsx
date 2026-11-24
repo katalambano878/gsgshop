@@ -3,45 +3,70 @@
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { usePageTitle } from '@/hooks/usePageTitle';
-import ProductCard, { type ColorVariant } from '@/components/ProductCard';
+import ProductCard from '@/components/ProductCard';
 import ProductCardSkeleton from '@/components/skeletons/ProductCardSkeleton';
-import { getColorHex } from '@/components/ProductCard';
 import { supabase } from '@/lib/supabase';
 import { cachedQuery } from '@/lib/query-cache';
 import PageHero from '@/components/PageHero';
-import { isPurchasable, sellableStock, stockCount } from '@/context/stock';
+import {
+  ALL_CATEGORY,
+  SHOP_PAGE_SIZE,
+  descendantCategoryIds,
+  formatShopProduct,
+  normalizeCategorySlug,
+  normalizeSort,
+  type ShopCategory,
+  type ShopProductCard,
+} from '@/lib/shop-catalog-shared';
 
-const NO_IMAGE =
-  "data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Crect width=%27100%27 height=%27100%27 fill=%27%23f3f4f6%27/%3E%3C/svg%3E";
-const SORTS = ['new', 'price-low', 'price-high'] as const;
+export type ShopClientProps = {
+  initialProducts?: ShopProductCard[];
+  initialTotal?: number;
+  initialCategories?: ShopCategory[];
+  initialQuery?: { category: string; search: string; sort: string };
+};
 
-function ShopContent() {
+function ShopContent({
+  initialProducts = [],
+  initialTotal = 0,
+  initialCategories,
+  initialQuery,
+}: ShopClientProps) {
   usePageTitle('Shop All Products');
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
 
-  // State
-  const [products, setProducts] = useState<any[]>([]);
-  const [categories, setCategories] = useState<any[]>([{ id: 'all', name: 'All Products', count: 0 }]);
-  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [retryKey, setRetryKey] = useState(0);
-  const [totalProducts, setTotalProducts] = useState(0);
-  const requestRef = useRef(0);
-
   // Category, search and sort always come from the URL, so the header search,
   // category links and "Shop All" each show exactly what they say.
-  const selectedCategory = searchParams.get('category') || 'all';
+  const selectedCategory = normalizeCategorySlug(searchParams.get('category'));
   const search = (searchParams.get('search') || '').trim();
-  const rawSort = searchParams.get('sort') || 'new';
-  const sortBy = (SORTS as readonly string[]).includes(rawSort) ? rawSort : 'new';
+  const sortBy = normalizeSort(searchParams.get('sort'));
+
+  const matchesInitial = !!(
+    initialQuery &&
+    selectedCategory === (initialQuery.category || 'all') &&
+    search === (initialQuery.search || '') &&
+    sortBy === (initialQuery.sort || 'new')
+  );
+
+  // Seed from the server payload so the first HTML already lists products.
+  const [products, setProducts] = useState<ShopProductCard[]>(matchesInitial ? initialProducts : []);
+  const [categories, setCategories] = useState<ShopCategory[]>(
+    initialCategories && initialCategories.length > 0 ? initialCategories : [ALL_CATEGORY]
+  );
+  const [categoriesLoaded, setCategoriesLoaded] = useState(!!(initialCategories && initialCategories.length > 0));
+  const [loading, setLoading] = useState(!matchesInitial);
+  const [loadError, setLoadError] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
+  const [totalProducts, setTotalProducts] = useState(matchesInitial ? initialTotal : 0);
+  const requestRef = useRef(0);
+  const skipLoadingForInitial = useRef(matchesInitial);
 
   const [priceRange, setPriceRange] = useState([0, 5000]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const productsPerPage = 9;
+  const productsPerPage = SHOP_PAGE_SIZE;
 
   // A new category, search or sort starts again at page 1.
   useEffect(() => {
@@ -58,7 +83,7 @@ function ShopContent() {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
   const setSelectedCategory = (slug: string) => updateUrl({ category: slug });
-  const setSortBy = (value: string) => updateUrl({ sort: value === 'new' ? null : value });
+  const setSortBy = (value: string) => updateUrl({ sort: normalizeSort(value) === 'new' ? null : normalizeSort(value) });
 
   // Fetch Categories from cached API
   useEffect(() => {
@@ -89,7 +114,19 @@ function ShopContent() {
 
     const requestId = ++requestRef.current;
     async function fetchProducts() {
-      setLoading(true);
+      const canUseInitial =
+        skipLoadingForInitial.current &&
+        matchesInitial &&
+        page === 1 &&
+        priceRange[0] === 0 &&
+        priceRange[1] >= 5000;
+      if (canUseInitial) {
+        // Keep the server-rendered products on screen; a later client refresh
+        // still runs below without swapping the grid for skeletons.
+        skipLoadingForInitial.current = false;
+      } else {
+        setLoading(true);
+      }
       setLoadError(false);
       try {
         // Build cache key from all filter params
@@ -120,19 +157,8 @@ function ShopContent() {
             if (selectedCategory !== 'all') {
               const categoryObj = categories.find(c => c.slug === selectedCategory);
 
-              if (categoryObj) {
-                const ids = [categoryObj.id];
-                let frontier = [categoryObj.id];
-                while (frontier.length) {
-                  const childIds = categories
-                    .filter(c => c.parent_id && frontier.includes(c.parent_id))
-                    .map(c => c.id)
-                    .filter(id => !ids.includes(id));
-                  if (childIds.length === 0) break;
-                  ids.push(...childIds);
-                  frontier = childIds;
-                }
-                query = query.in('category_id', ids);
+              if (categoryObj && categoryObj.id !== 'all') {
+                query = query.in('category_id', descendantCategoryIds(categories, categoryObj));
               } else {
                 // Unknown / inactive category slug — return no products rather
                 // than silently showing the entire catalogue.
@@ -173,42 +199,7 @@ function ShopContent() {
         if (error) throw error;
 
         if (data) {
-          const formattedProducts = data.map((p: any) => {
-            const variants = p.product_variants || [];
-            const hasVariants = variants.length > 0;
-            const minVariantPrice = hasVariants ? Math.min(...variants.map((v: any) => v.price || p.price)) : undefined;
-            // Extract unique colors from option2
-            const colorVariants: ColorVariant[] = [];
-            const seenColors = new Set<string>();
-            for (const v of variants) {
-              const colorName = v.option2;
-              if (colorName && !seenColors.has(colorName.toLowerCase().trim())) {
-                const hex = getColorHex(colorName);
-                if (hex) {
-                  seenColors.add(colorName.toLowerCase().trim());
-                  colorVariants.push({ name: colorName.trim(), hex });
-                }
-              }
-            }
-
-            return {
-              id: p.id,           // Product UUID for cart/orders
-              slug: p.slug,       // Slug for navigation
-              name: p.name,
-              price: p.price,
-              originalPrice: p.compare_at_price > p.price ? p.compare_at_price : undefined,
-              image: p.product_images?.[0]?.url || NO_IMAGE,
-              badge: p.compare_at_price > p.price ? 'Sale' : undefined,
-              inStock: isPurchasable(p, variants),
-              maxStock: sellableStock(stockCount(p, variants), p),
-              moq: p.moq || 1,
-              category: p.categories?.name,
-              hasVariants,
-              minVariantPrice,
-              colorVariants
-            };
-          });
-          setProducts(formattedProducts);
+          setProducts(data.map((p: any) => formatShopProduct(p)));
           setTotalProducts(count || 0);
         }
       } catch (err) {
@@ -496,10 +487,10 @@ function ShopContent() {
   );
 }
 
-export default function ShopPage() {
+export default function ShopClient(props: ShopClientProps) {
   return (
     <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="w-12 h-12 border-4 border-gsg-purple border-t-transparent rounded-full animate-spin"></div></div>}>
-      <ShopContent />
+      <ShopContent {...props} />
     </Suspense>
   );
 }
