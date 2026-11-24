@@ -2,7 +2,14 @@ import type { Metadata } from 'next';
 import { createServerSupabase } from '@/lib/supabase-server';
 import ShopClient from './ShopClient';
 import { createPageMetadata } from '@/lib/seo';
+import {
+  fetchShopCatalog,
+  normalizeCategorySlug,
+  normalizeSort,
+} from '@/lib/shop-catalog';
 
+// Never prerender an empty catalogue at build time (no database during build).
+export const dynamic = 'force-dynamic';
 
 type Props = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -33,7 +40,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
     const { data: category } = await supabase
       .from('categories')
       .select('name, description')
-      .eq('slug', categorySlug)
+      .eq('slug', normalizeCategorySlug(categorySlug))
       .eq('status', 'active')
       .maybeSingle();
 
@@ -44,7 +51,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
         description:
           category.description?.trim() ||
           `Shop ${name} online at GSG Convenience Goods & More. Pickup in Accra or delivery in and around Accra.`,
-        path: `/shop?category=${encodeURIComponent(categorySlug)}`,
+        path: `/shop?category=${encodeURIComponent(normalizeCategorySlug(categorySlug))}`,
         keywords: [name, `buy ${name} Ghana`, `${name} Accra`],
       });
     }
@@ -59,6 +66,34 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
   });
 }
 
-export default function ShopPage() {
-  return <ShopClient />;
+export default async function ShopPage({ searchParams }: Props) {
+  const params = await searchParams;
+  const categorySlug = normalizeCategorySlug(firstParam(params.category));
+  const search = (firstParam(params.search) || '').trim();
+  const sortBy = normalizeSort(firstParam(params.sort));
+
+  let catalog;
+  try {
+    catalog = await fetchShopCatalog({ categorySlug, search, sortBy, page: 1 });
+  } catch (err) {
+    console.error('Shop catalogue SSR failed:', err);
+    catalog = {
+      products: [],
+      total: 0,
+      categories: undefined,
+      categorySlug,
+      search,
+      sortBy,
+      page: 1,
+    };
+  }
+
+  return (
+    <ShopClient
+      initialProducts={catalog.products}
+      initialTotal={catalog.total}
+      initialCategories={catalog.categories}
+      initialQuery={{ category: catalog.categorySlug, search: catalog.search, sort: catalog.sortBy }}
+    />
+  );
 }
